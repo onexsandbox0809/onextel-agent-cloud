@@ -79,6 +79,7 @@ export async function importWorkbook(args: {
   email: string;
 }): Promise<ImportResult> {
   const { agent, section, token, email } = args;
+  const entityId = agent.entity_id;
   const wb = XLSX.read(args.buf, { type: 'buffer', cellDates: false });
   const sheets = readSheets(wb);
   const out: ImportResult = { imported: 0, skipped: 0, warnings: [], errors: [], created: [] };
@@ -108,7 +109,7 @@ export async function importWorkbook(args: {
       out.created = fresh.slice(0, 5).map((f) => f.question);
       recordAudit(agent.tenant_id, email, 'faq.import', `${fresh.length} FAQs from file`);
       if (token) {
-        const res = await push(fresh.map((f) => () => meta.createFaq(agent.entity_id, { question: f.question, answer: f.answer }, token)));
+        const res = await push(fresh.map((f) => () => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token)));
         res.forEach((r, i) => { if (r && r.ok === false) out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r.error || 'error'}`); });
       } else out.warnings.push('Saved locally. No Meta token configured, so nothing was pushed to Meta.');
     }
@@ -140,7 +141,7 @@ export async function importWorkbook(args: {
       out.created = fresh.map((s) => s.title);
       recordAudit(agent.tenant_id, email, 'skill.import', `${fresh.length} skills from file`);
       if (token && agent.meta_agent_id) {
-        const res = await push(fresh.map((s) => () => meta.createSkill(agent.entity_id, agent.meta_agent_id as string, { title: s.title, description: s.description, skill: s.skill }, token)));
+        const res = await push(fresh.map((s) => () => meta.createSkill(entityId, agent.meta_agent_id as string, { title: s.title, description: s.description, skill: s.skill }, token)));
         res.forEach((r, i) => { if (r && r.ok === false) out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r.error || 'error'}`); });
       } else out.warnings.push(token ? 'Saved locally. Register the number to get an agent ID before skills can sync to Meta.' : 'Saved locally. No Meta token configured.');
     }
@@ -231,14 +232,14 @@ export async function importWorkbook(args: {
     recordAudit(agent.tenant_id, email, 'connector.import', `${newConns.length} connectors, ${newConns.reduce((n, c) => n + c.tools.length, 0)} tools`);
     if (token) {
       for (const c of newConns) {
-        const rem = await meta.createConnector(agent.entity_id, {
+        const rem = await meta.createConnector(entityId, {
           name: c.name, description: c.description, base_url: c.base_url,
           auth_type: c.auth_type, requires_certificate: false,
         }, token);
         if (rem.ok) { c.status = 'active'; c.synced_at = nowIso(); }
         else out.warnings.push(`Connector ${c.name}: saved locally, Meta rejected it — ${rem.error || 'error'}`);
         if (rem.ok && c.tools.length) {
-          const res = await push(c.tools.map((t: any) => () => meta.createTool(agent.entity_id, c.id, toToolDefinition(t), token)));
+          const res = await push(c.tools.map((t: any) => () => meta.createTool(entityId, c.id, toToolDefinition(t), token)));
           res.forEach((r, i) => { if (r && r.ok === false) out.warnings.push(`Tool ${c.tools[i].name}: Meta rejected it — ${r.error || 'error'}`); });
         }
       }

@@ -5,6 +5,7 @@ import { db, nowIso, recordAudit } from '@/lib/demo-db';
 import { isDemo, metaTokenInfo } from '@/lib/env';
 import { meta } from '@/lib/meta';
 import { sbNumber, sbUpdateNumber } from '@/lib/supabase-repo';
+import { propagateNumberId } from '@/lib/entity';
 import type { PhoneNumber } from '@/lib/types';
 
 const PN_RE = /^\d{10,20}$/;
@@ -77,6 +78,7 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
     number.wa_phone_number_id = pn;
     number.waba_id = waba || number.waba_id;
     await persist(number);
+    await propagateNumberId(number.tenant_id, number.id, number.wa_phone_number_id);
     recordAudit(number.tenant_id, session.user.email, 'number.update_ids', `${number.display} → PN ${pn}`, 'warning');
     return NextResponse.json({ number });
   }
@@ -100,20 +102,61 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
       return NextResponse.json({ number, needs_pin: false, steps: [], error: msg, mode: 'unconfigured' }, { status: 503 });
     }
 
-    // The PIN is required by /register (Cloud API number registration), not by agent onboarding.
-    if (!/^\d{6}$/.test(pin)) {
-      return NextResponse.json({
-        number, needs_pin: true, steps: [],
-        error: 'Enter the 6-digit two-step verification PIN for this number (WhatsApp Manager → Phone numbers → Two-step verification set by your business). Meta requires it on the /register call that precedes onboarding.',
-      }, { status: 428 });
-    }
-
     const steps: any[] = [];
     const pn = digits(number.wa_phone_number_id);
+    const ctx = { actor: session.user.email, tenant: number.tenant_id, number: number.display, phone_number_id: pn };
 
-    // ── Step 1: POST graph.facebook.com/v25.0/<pn>/register {messaging_product, pin} ──
-    const ctx = { actor: session.user.email, tenant: number.tenant_id, number: number.display, phone_number_id: pn, action: 'register' };
-    const reg = await meta.registerNumber(pn, pin, token, ctx);
+    // ── Fast path: a number that is already registered only needs onboarding. ──
+    // No PIN is asked for unless Meta explicitly says the number is not registered yet.
+    if (!pin) {
+      const onboardOnly = await meta.onboarding(pn, token, { ...ctx, action: 'agent_onboarding' });
+      steps.push({
+        step: 'agent_onboarding', host: 'api.facebook.com', ok: onboardOnly.ok, http: onboardOnly.status,
+        error: onboardOnly.ok ? null : onboardOnly.error || null, data: onboardOnly.data ?? null,
+      });
+
+      if (onboardOnly.ok) {
+        const d: any = onboardOnly.data || {};
+        const picked = pickAgentId(d);
+        number.status = 'active';
+        number.registered_at = number.registered_at || nowIso();
+        number.two_step_pin_set = number.two_step_pin_set || false;
+        number.meta_agent_id = picked.id || number.meta_agent_id || null;
+        await persist(number);
+        recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${picked.id || 'unconfirmed'}`, picked.id ? 'critical' : 'warning');
+        return NextResponse.json({
+          number, agent_id: picked.id, mode: 'graph', needs_pin: false, steps,
+          raw_agent_value: picked.raw,
+          warning: picked.id ? undefined : `Onboarded, but Meta's response had no recognisable agent ID${picked.raw ? ` (got "${picked.raw.slice(0, 40)}")` : ''}. Check the raw response and paste the ID under Fix IDs if it exists in Meta Business Suite.`,
+        });
+      }
+
+      const raw = String(onboardOnly.error || '');
+      if (/pin|two.?step|not registered|unregistered|verify your (number|phone)|register the (number|phone)/i.test(raw)) {
+        number.status = 'pending_registration';
+        await persist(number);
+        return NextResponse.json({
+          number, needs_pin: true, steps,
+          error: "Meta says this number itself is not registered on the WhatsApp Cloud API yet, so it needs the number's 6-digit two-step PIN once. After that, onboarding runs without a PIN.",
+        }, { status: 428 });
+      }
+
+      number.status = 'pending_registration';
+      await persist(number);
+      return NextResponse.json({
+        number, needs_pin: false, steps,
+        error: /not found|does not exist|invalid.*(phone|number)|Object with ID/i.test(raw)
+          ? `Meta could not find phone number ID ${pn} (${raw}). Use "Fix IDs" and paste the numeric Phone number ID from WhatsApp Manager.`
+          : raw || 'Onboarding failed at Meta.',
+      }, { status: 502 });
+    }
+
+    // ── Explicit path: PIN supplied → /register, then onboarding. ──
+    if (!/^\d{6}$/.test(pin)) {
+      return NextResponse.json({ number, needs_pin: true, steps, error: 'The two-step PIN must be exactly 6 digits.' }, { status: 400 });
+    }
+
+    const reg = await meta.registerNumber(pn, pin, token, { ...ctx, action: 'register' });
     const regMsg = `${reg.error || ''} ${String((reg.data as any)?.error?.message || '')}`;
     const already = !reg.ok && /already (been )?registered|already_registered|is already registered/i.test(regMsg);
     steps.push({
@@ -136,7 +179,6 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
       }, { status: 502 });
     }
 
-    // ── Step 2: POST api.facebook.com/<pn>/agent_onboarding?channel=whatsapp ──
     const onboard = await meta.onboarding(pn, token, { ...ctx, action: 'agent_onboarding' });
     steps.push({
       step: 'agent_onboarding', host: 'api.facebook.com', ok: onboard.ok, http: onboard.status,
@@ -155,23 +197,21 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
       }, { status: 502 });
     }
 
-    const d: any = onboard.data || {};
-    const picked = pickAgentId(d);
-    const agentId = picked.id;
+    const d2: any = onboard.data || {};
+    const picked2 = pickAgentId(d2);
     number.status = 'active';
     number.registered_at = nowIso();
     number.two_step_pin_set = true;
-    number.meta_agent_id = agentId || number.meta_agent_id || null;
+    number.meta_agent_id = picked2.id || number.meta_agent_id || null;
     await persist(number);
-    recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${agentId || 'unconfirmed'}`, agentId ? 'critical' : 'warning');
+    recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${picked2.id || 'unconfirmed'}`, picked2.id ? 'critical' : 'warning');
     return NextResponse.json({
-      number, agent_id: agentId, mode: 'graph', needs_pin: false, steps,
-      raw_agent_value: picked.raw,
-      warning: agentId
-        ? undefined
-        : picked.raw
-        ? `Number registered, but Meta's onboarding response did not contain a numeric agent ID (it returned "${picked.raw.slice(0, 60)}"). Nothing was saved as the agent ID — open Meta Business Suite, find the agent for this number and paste its ID under "Fix IDs".`
-        : 'Number registered, but the onboarding response had no agent ID field. Check the raw response below; if the agent exists in Meta Business Suite, paste its ID under "Fix IDs".',
+      number, agent_id: picked2.id, mode: 'graph', needs_pin: false, steps,
+      raw_agent_value: picked2.raw,
+      warning: picked2.id ? undefined
+        : picked2.raw
+        ? `Registered and onboarded, but Meta's response did not contain a numeric or pfbid agent ID (got "${picked2.raw.slice(0, 60)}"). Nothing was saved as the agent ID.`
+        : 'Registered and onboarded, but the response had no agent ID field. Check the raw response; paste the ID under Fix IDs if it exists in Meta Business Suite.',
     });
   }
 

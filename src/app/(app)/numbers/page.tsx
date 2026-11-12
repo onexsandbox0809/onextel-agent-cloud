@@ -73,7 +73,9 @@ export default function NumbersPage() {
       const r = await api<any>(`/api/numbers/${n.id}`, 'PATCH', { action: 'onboard', pin: withPin || '' });
       setResult({ id: n.id, agentId: r.agent_id ?? null, mode: r.mode, steps: r.steps ?? [] });
       setNeedsPin(null);
-      push(r.agent_id ? `Onboarded — agent ID ${r.agent_id}` : 'Onboarded.');
+      setPinFor(null);      // panel closes: nothing left to ask for
+      setPin('');
+      push(r.agent_id ? `Registered — agent ID ${r.agent_id}` : 'Onboarded.');
       reload();
     } catch (e) {
       // the API returns structured diagnostics on 502 — surface them inline
@@ -279,27 +281,33 @@ export default function NumbersPage() {
                           Meta returns the agent ID on the second call.
                         </div>
                         <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                          <div style={{ width: 200 }}>
-                            <Field label="6-digit two-step PIN">
-                              <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
-                                value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
-                            </Field>
-                          </div>
-                          <button className="btn btn-primary" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
-                            {regBusy === n.id ? 'Registering…' : n.status === 'active' ? 'Re-run registration' : 'Register number & onboard agent'}
-                          </button>
+                          {needsPin === n.id ? (
+                            <>
+                              <div style={{ width: 200 }}>
+                                <Field label="6-digit two-step PIN">
+                                  <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
+                                    autoFocus value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+                                </Field>
+                              </div>
+                              <button className="btn btn-primary" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
+                                {regBusy === n.id ? 'Registering…' : 'Register number, then onboard'}
+                              </button>
+                            </>
+                          ) : (
+                            <button className="btn btn-primary" disabled={regBusy === n.id} onClick={() => register(n)}>
+                              {regBusy === n.id ? 'Talking to Meta…' : n.status === 'active' ? 'Re-run onboarding' : 'Register agent with Meta'}
+                            </button>
+                          )}
                           {n.meta_agent_id ? (
                             <span className="mono tiny dim" title={n.meta_agent_id}>
                               agent {n.meta_agent_id.length > 26 ? `${n.meta_agent_id.slice(0, 12)}…${n.meta_agent_id.slice(-6)}` : n.meta_agent_id}
-                              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 4, padding: '0 4px' }}
-                                onClick={() => { navigator.clipboard?.writeText(n.meta_agent_id!); push('Agent ID copied.'); }}>copy</button>
                             </span>
                           ) : null}
                         </div>
                         <div className="tiny dim">
-                          The PIN is your business’s two-step verification code for this number in WhatsApp Manager — Meta requires it
-                          on <span className="mono">/register</span> before the number can be onboarded. Test numbers often use <span className="mono">123456</span>.
-                          “Already registered” is treated as success and onboarding continues.
+                          {needsPin === n.id
+                            ? "Meta asked for the number's two-step PIN, so it is needed once to register the number itself. Afterwards onboarding runs without it."
+                            : "No PIN needed: this calls POST api.facebook.com/{id}/agent_onboarding and reads the agent ID from the response. The PIN is only requested if Meta says the number is not registered yet."}
                         </div>
                         <details>
                           <summary className="tiny mono dim" style={{ cursor: 'pointer', padding: '2px 0' }}>Fix IDs (phone number ID / WABA ID / agent ID)</summary>

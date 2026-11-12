@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { syncEntityId } from '@/lib/entity';
 import { getSession } from '@/lib/auth';
 import { canWrite, forbidden } from '@/lib/session-util';
 import { getAgent, recordAudit } from '@/lib/demo-db';
@@ -31,11 +32,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   }
 
   let remote: unknown = null;
-  if (patch.business_info && agent.entity_id && process.env.META_SYSTEM_USER_TOKEN) {
-    remote = await meta.putBusinessInfo(agent.entity_id, patch.business_info);
+  const entityId = await syncEntityId(agent);
+  if (patch.business_info && entityId && process.env.META_SYSTEM_USER_TOKEN) {
+    remote = await meta.putBusinessInfo(entityId, patch.business_info);
   }
-  if (patch.settings && agent.entity_id && agent.meta_agent_id && process.env.META_SYSTEM_USER_TOKEN) {
-    remote = await meta.putSettings(agent.entity_id, agent.meta_agent_id, patch.settings);
+  if (patch.settings && entityId && agent.meta_agent_id && process.env.META_SYSTEM_USER_TOKEN) {
+    remote = await meta.putSettings(entityId, agent.meta_agent_id, patch.settings);
   }
 
   if (isDemo()) {

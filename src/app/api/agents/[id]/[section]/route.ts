@@ -6,6 +6,7 @@ import { isDemo, metaTokenInfo } from '@/lib/env';
 import { sbAgent, sbUpdateAgent } from '@/lib/supabase-repo';
 import { meta, toToolDefinition } from '@/lib/meta';
 import { importWorkbook, MAX_IMPORT_ROWS } from '@/lib/agent-import';
+import { resolveEntityId, syncEntityId } from '@/lib/entity';
 import type { Agent } from '@/lib/types';
 
 type Ctx = { params: Promise<{ id: string; section: string }> };
@@ -32,6 +33,8 @@ export async function POST(req: Request, ctx: Ctx) {
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
+  await syncEntityId(agent);
+  const entityId = agent.entity_id;
   const ctype = req.headers.get('content-type') || '';
   const isUpload = ctype.includes('multipart/form-data');
   const body = isUpload ? {} : await req.json().catch(() => ({}));
@@ -65,7 +68,7 @@ export async function POST(req: Request, ctx: Ctx) {
       if (!body.question?.trim() || !body.answer?.trim()) return NextResponse.json({ error: 'Question and answer are required.' }, { status: 400 });
       const faq = { id: newId('faq'), question: body.question, answer: body.answer, category: body.category || 'General', updated_at: nowIso() };
       await persist(agent, { faqs: [faq, ...agent.faqs] } as Partial<Agent>);
-      const remote = token ? await meta.createFaq(agent.entity_id, { question: faq.question, answer: faq.answer }, token) : null;
+      const remote = token ? await meta.createFaq(entityId, { question: faq.question, answer: faq.answer }, token) : null;
       recordAudit(agent.tenant_id, session.user.email, 'faq.create', faq.question);
       return NextResponse.json({ faq, remote });
     }
@@ -73,7 +76,7 @@ export async function POST(req: Request, ctx: Ctx) {
       if (!body.title?.trim() || !body.skill?.trim()) return NextResponse.json({ error: 'Title and skill instructions are required.' }, { status: 400 });
       const skill = { id: newId('sk'), title: body.title, description: body.description || `Apply for: ${body.title}`, skill: body.skill, enabled: body.enabled !== false, updated_at: nowIso() };
       await persist(agent, { skills: [skill, ...agent.skills] } as Partial<Agent>);
-      const remote = token && agent.meta_agent_id ? await meta.createSkill(agent.entity_id, agent.meta_agent_id, { title: skill.title, description: skill.description, skill: skill.skill }, token) : null;
+      const remote = token && agent.meta_agent_id ? await meta.createSkill(entityId, agent.meta_agent_id, { title: skill.title, description: skill.description, skill: skill.skill }, token) : null;
       recordAudit(agent.tenant_id, session.user.email, 'skill.create', skill.title);
       return NextResponse.json({ skill, remote });
     }
@@ -86,7 +89,7 @@ export async function POST(req: Request, ctx: Ctx) {
         status: 'draft' as const, secret_ref: body.secret_ref || null, synced_at: null, tools: [],
       };
       await persist(agent, { connectors: [...agent.connectors, conn] } as Partial<Agent>);
-      const remote = token ? await meta.createConnector(agent.entity_id, {
+      const remote = token ? await meta.createConnector(entityId, {
         name: conn.name, description: conn.description, base_url: conn.base_url,
         auth_type: conn.auth_type, requires_certificate: false,
       }, token) : null;
@@ -109,14 +112,14 @@ export async function POST(req: Request, ctx: Ctx) {
       };
       connector.tools.push(tool);
       await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
-      const remote = token ? await meta.createTool(agent.entity_id, connector.id, toToolDefinition(tool), token) : null;
+      const remote = token ? await meta.createTool(entityId, connector.id, toToolDefinition(tool), token) : null;
       recordAudit(agent.tenant_id, session.user.email, 'tool.create', tool.name);
       return NextResponse.json({ tool, remote }, { status: 201 });
     }
     case 'publish': {
       const nextVersion = agent.version + 1;
       const remote = token && agent.meta_agent_id
-        ? await meta.putSettings(agent.entity_id, agent.meta_agent_id, { rollout: { enabled: true }, handoff: agent.settings.handoff, followup: agent.settings.followup, ai_audience: agent.settings.ai_audience }, token)
+        ? await meta.putSettings(entityId, agent.meta_agent_id, { rollout: { enabled: true }, handoff: agent.settings.handoff, followup: agent.settings.followup, ai_audience: agent.settings.ai_audience }, token)
         : null;
       await persist(agent, {
         status: 'live', version: nextVersion, published_at: nowIso(), health: Math.max(agent.health, 72),
@@ -133,7 +136,7 @@ export async function POST(req: Request, ctx: Ctx) {
     case 'rollout': {
       const enabled = body.enabled !== false;
       const remote = token && agent.meta_agent_id
-        ? await meta.putRollout(agent.entity_id, agent.meta_agent_id, enabled, token)
+        ? await meta.putRollout(entityId, agent.meta_agent_id, enabled, token)
         : null;
       if (remote && !remote.ok) {
         return NextResponse.json({ agent, remote, error: `Meta rejected the rollout change: ${remote.error || 'error'}` }, { status: 502 });
@@ -151,7 +154,7 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     case 'evaluate': {
       const ids: string[] = body.case_ids || [];
-      const remote = token ? await meta.runEval(agent.entity_id, ids, token) : null;
+      const remote = token ? await meta.runEval(entityId, ids, token) : null;
       const d = db();
       const cases = d.evals.filter((e) => e.agent_id === agent.id && (!ids.length || ids.includes(e.id)));
       const passed = cases.filter((c) => c.last_result === 'pass').length;
@@ -192,6 +195,8 @@ export async function PUT(req: Request, ctx: Ctx) {
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
+  await syncEntityId(agent);
+  const entityId = agent.entity_id;
   const body = await req.json();
 
   if (section === 'faqs') {
@@ -227,6 +232,8 @@ export async function DELETE(req: Request, ctx: Ctx) {
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
+  await syncEntityId(agent);
+  const entityId = agent.entity_id;
   const body = await req.json().catch(() => ({}));
 
   if (section === 'faqs') { agent.faqs = agent.faqs.filter((f) => f.id !== body.id); await persist(agent, { faqs: agent.faqs } as Partial<Agent>); }
@@ -235,7 +242,7 @@ export async function DELETE(req: Request, ctx: Ctx) {
     agent.connectors = agent.connectors.map((c) => ({ ...c, tools: c.tools.filter((t) => t.id !== body.id) }));
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
     const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
-    if (token) await meta.deleteTool(agent.entity_id, body.connector_id, body.id, token);
+    if (token) await meta.deleteTool(entityId, body.connector_id, body.id, token);
   } else if (section === 'connectors') {
     agent.connectors = agent.connectors.filter((c) => c.id !== body.id);
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
@@ -253,6 +260,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
+  await syncEntityId(agent);
+  const entityId = agent.entity_id;
   const body = await req.json();
 
   if (section === 'tools' && body.action === 'run') {
@@ -260,7 +269,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const tool = connector?.tools.find((t) => t.id === body.tool_id);
     if (!connector || !tool) return NextResponse.json({ error: 'Tool not found' }, { status: 404 });
     const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
-    const remote = token ? await meta.runTool(agent.entity_id, connector.id, tool.id, body.input || '{}', token) : null;
+    const remote = token ? await meta.runTool(entityId, connector.id, tool.id, body.input || '{}', token) : null;
     tool.last_run_at = nowIso();
     tool.last_status = remote ? (remote.ok ? 'ok' : 'error') : 'ok';
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
