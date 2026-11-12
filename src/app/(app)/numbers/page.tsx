@@ -39,14 +39,15 @@ export default function NumbersPage() {
     if (!form.display.trim()) { setErr('Enter the WhatsApp display number.'); return; }
     if (isAdmin && !form.tenant_id) { setErr('Select the tenant that owns this number.'); return; }
     setSaving(true);
+    const payload = { ...form };
     try {
-      await api('/api/numbers', 'POST', form);
+      await api('/api/numbers', 'POST', payload);
       push('Number provisioned — register it with Meta next.');
-      setAdd(false);
       setForm({ display: '', country: 'IN', category: 'OTHER', wa_phone_number_id: '', waba_id: '', tenant_id: tenantDefault });
+      setAdd(false);           // close BEFORE reload so the modal can never stick
       reload();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not provision the number.');
+      push(e instanceof Error ? e.message : 'Could not provision the number.', true);
     } finally { setSaving(false); }
   };
 
