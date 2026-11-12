@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { canWrite, forbidden, scopeOf } from '@/lib/session-util';
 import { db, newId, nowIso, recordAudit } from '@/lib/demo-db';
-import { isDemo } from '@/lib/env';
+import { isDemo, metaTokenInfo } from '@/lib/env';
 import { sbCredentials, sbDeleteCredential, sbInsertCredential } from '@/lib/supabase-repo';
 
 export async function GET() {
@@ -12,7 +12,7 @@ export async function GET() {
   const list = isDemo()
     ? db().credentials.filter((c) => (scope ? c.tenant_id === scope : true))
     : await sbCredentials(scope);
-  return NextResponse.json({ credentials: list, graphConfigured: !!process.env.META_SYSTEM_USER_TOKEN });
+  return NextResponse.json({ credentials: list, graphConfigured: metaTokenInfo().present });
 }
 
 export async function POST(req: Request) {

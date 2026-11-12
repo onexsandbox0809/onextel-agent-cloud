@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { canWrite, forbidden } from '@/lib/session-util';
 import { db, getAgent, newId, nowIso, recordAudit } from '@/lib/demo-db';
-import { isDemo } from '@/lib/env';
+import { isDemo, metaTokenInfo } from '@/lib/env';
 import { sbAgent, sbUpdateAgent } from '@/lib/supabase-repo';
 import { meta, toToolDefinition } from '@/lib/meta';
 import { importWorkbook, MAX_IMPORT_ROWS } from '@/lib/agent-import';
@@ -35,7 +35,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const ctype = req.headers.get('content-type') || '';
   const isUpload = ctype.includes('multipart/form-data');
   const body = isUpload ? {} : await req.json().catch(() => ({}));
-  const token = process.env.META_SYSTEM_USER_TOKEN;
+  const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
 
   // ── Bulk upload: .xlsx / .xls / .csv ──────────────────────────────────
   if (isUpload) {
@@ -123,7 +123,7 @@ export async function POST(req: Request, ctx: Ctx) {
         settings: { ...agent.settings, rollout: { enabled: true } },
       } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, 'agent.publish', `${agent.name} v${nextVersion}`, 'critical');
-      return NextResponse.json({ agent, remote, mode: remote ? 'graph' : 'config_only' });
+      return NextResponse.json({ agent, remote, mode: remote ? 'graph' : 'not_sent', warning: remote ? undefined : 'Saved locally. No Meta token on this deployment, so rollout was NOT changed at Meta.' });
     }
     case 'pause': {
       await persist(agent, { status: 'paused', settings: { ...agent.settings, rollout: { enabled: false } } } as Partial<Agent>);
@@ -144,7 +144,8 @@ export async function POST(req: Request, ctx: Ctx) {
       } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, enabled ? 'agent.enable' : 'agent.disable', agent.name, 'critical');
       return NextResponse.json({
-        agent, remote, mode: remote ? 'graph' : 'config_only',
+        agent, remote, mode: remote ? 'graph' : 'not_sent',
+        warning: remote ? undefined : 'Saved locally. No Meta token, so rollout was NOT changed at Meta.',
         rollout: { enabled },
       });
     }
@@ -157,8 +158,8 @@ export async function POST(req: Request, ctx: Ctx) {
       cases.forEach((c) => { c.last_run_at = nowIso(); });
       recordAudit(agent.tenant_id, session.user.email, 'agent.evaluate', `${cases.length} cases`);
       return NextResponse.json({
-        run: { id: newId('run'), job_id: remote?.data?.job_id || `sim_${Date.now()}`, status: 'completed', score: cases.length ? Math.round((passed / cases.length) * 100) : 0, cases_total: cases.length, cases_passed: passed, started_at: nowIso() },
-        remote, mode: remote ? 'graph' : 'simulated',
+        run: { id: newId('run'), job_id: (remote?.data as any)?.job_id || null, status: 'completed', score: cases.length ? Math.round((passed / cases.length) * 100) : 0, cases_total: cases.length, cases_passed: passed, started_at: nowIso() },
+        remote, mode: remote ? 'graph' : 'not_sent',
       });
     }
     case 'test': {
@@ -233,7 +234,7 @@ export async function DELETE(req: Request, ctx: Ctx) {
   else if (section === 'tools') {
     agent.connectors = agent.connectors.map((c) => ({ ...c, tools: c.tools.filter((t) => t.id !== body.id) }));
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
-    const token = process.env.META_SYSTEM_USER_TOKEN;
+    const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
     if (token) await meta.deleteTool(agent.entity_id, body.connector_id, body.id, token);
   } else if (section === 'connectors') {
     agent.connectors = agent.connectors.filter((c) => c.id !== body.id);
@@ -258,13 +259,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const connector = agent.connectors.find((c) => c.tools.some((t) => t.id === body.tool_id));
     const tool = connector?.tools.find((t) => t.id === body.tool_id);
     if (!connector || !tool) return NextResponse.json({ error: 'Tool not found' }, { status: 404 });
-    const token = process.env.META_SYSTEM_USER_TOKEN;
+    const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
     const remote = token ? await meta.runTool(agent.entity_id, connector.id, tool.id, body.input || '{}', token) : null;
     tool.last_run_at = nowIso();
     tool.last_status = remote ? (remote.ok ? 'ok' : 'error') : 'ok';
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
     return NextResponse.json({
-      result: remote?.data || { simulated: true, status: 200, body: { note: 'Simulated execution — add a Meta token in Settings to invoke the live connector.', input: JSON.parse(body.input || '{}') } },
+      result: remote?.data ?? null, mode: remote ? 'graph' : 'not_sent', error: remote && !remote.ok ? remote.error : undefined,
       remote, tool,
     });
   }

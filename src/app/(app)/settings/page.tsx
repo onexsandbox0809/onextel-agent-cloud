@@ -11,6 +11,7 @@ export default function Settings() {
   const [form, setForm] = useState({ name: '', kind: 'graph_token', value: '', environment: 'production', tenant_id: '' });
   const { push } = useToast();
   const logs = useApi<{ file: string; storage: string; text: string; status: any; lines: number }>('/api/logs');
+  const conn = useApi<any>('/api/meta-status');
   if (ses.loading || !ses.data) return <Skeleton h={420} />;
   const t = ses.data.tenant;
 
@@ -28,6 +29,41 @@ export default function Settings() {
 
       <div className="split-2">
         <div className="stack">
+          <Card>
+            <div className="card-head">
+              <div className="card-title">Meta connection</div>
+              <span className="badge" style={{ marginLeft: 'auto' }} data-ok={conn.data?.graph?.ok ? '1' : '0'}>
+                {conn.data?.graph?.ok ? `LIVE · ${conn.data.graph.status}` : conn.data?.token?.present ? 'TOKEN PRESENT' : 'NO TOKEN'}
+              </span>
+            </div>
+            <div style={{ padding: '0 18px 14px' }}>
+              {!conn.data && <div className="tiny dim">Checking Meta…</div>}
+              {conn.data && (
+                <div className="stack" style={{ gap: 8 }}>
+                  <div className="tiny">
+                    <span className="mono">META_SYSTEM_USER_TOKEN</span> — {conn.data.token.present ? `${conn.data.token.length} chars` : 'not set'}
+                    {conn.data.graph?.ok ? ` · verified as ${conn.data.graph.name || conn.data.graph.id}` : ''}
+                  </div>
+                  {!!conn.data.token.problems?.length && (
+                    <div className="notice err" style={{ margin: 0 }}>
+                      {conn.data.token.problems.map((x: string, i: number) => <div key={i}>{x}</div>)}
+                    </div>
+                  )}
+                  {conn.data.graph && !conn.data.graph.ok && (
+                    <div className="notice err" style={{ margin: 0 }}>
+                      Meta rejected the token: {conn.data.graph.error || `HTTP ${conn.data.graph.status}`}
+                    </div>
+                  )}
+                  <div className="tiny dim">
+                    Hosts — register: <span className="mono">{conn.data.graphHost}/v25.0</span> · onboarding: <span className="mono">{conn.data.onboardingHost}</span>
+                  </div>
+                  <div className="tiny dim">{conn.data.deployHint}</div>
+                  <div><button className="btn btn-sm" onClick={() => conn.reload()}>Re-check</button></div>
+                </div>
+              )}
+            </div>
+          </Card>
+
           <Card>
             <div className="card-head">
               <div className="card-title">Meta API request log</div>

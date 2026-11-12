@@ -30,7 +30,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     conv.messages.push({ id: newId('m'), role: 'system', text: body.action === 'takeover' ? 'Human agent took over the thread.' : 'Thread released back to the agent.', at: nowIso() });
     recordAudit(conv.tenant_id, session.user.email, `thread.${body.action}`, conv.customer);
     if (!isDemo()) await sbUpdateConversation(conv);
-    return NextResponse.json({ conversation: conv, remote, mode: token ? 'graph' : 'simulated' });
+    return NextResponse.json({ conversation: conv, remote, mode: token ? 'graph' : 'not_sent' });
   } else if (body.action === 'resolve') {
     conv.status = 'resolved';
   }

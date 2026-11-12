@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
 import { canWrite, forbidden } from '@/lib/session-util';
 import { db, nowIso, recordAudit } from '@/lib/demo-db';
-import { isDemo } from '@/lib/env';
+import { isDemo, metaTokenInfo } from '@/lib/env';
 import { meta } from '@/lib/meta';
 import { sbNumber, sbUpdateNumber } from '@/lib/supabase-repo';
 import type { PhoneNumber } from '@/lib/types';
@@ -52,7 +52,6 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
 
   if (body.action === 'onboard' || body.action === 'register') {
     const pin = String(body.pin || '').trim();
-    const token = process.env.META_SYSTEM_USER_TOKEN;
 
     if (!PN_RE.test(digits(number.wa_phone_number_id))) {
       return NextResponse.json({
@@ -61,15 +60,13 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
       }, { status: 400 });
     }
 
-    if (!token) {
-      number.status = 'active';
-      number.registered_at = nowIso();
-      number.meta_agent_id = number.meta_agent_id || `sim_${Math.random().toString(36).slice(2, 12)}`;
-      await persist(number);
-      return NextResponse.json({
-        number, agent_id: number.meta_agent_id, mode: 'simulated', needs_pin: false,
-        steps: [{ step: 'agent_onboarding', ok: true, status: 200, note: 'Simulated — add META_SYSTEM_USER_TOKEN to call Meta.' }],
-      });
+    const ti = metaTokenInfo();
+    const token = ti.headerValue ? ti.headerValue.replace(/^Bearer\s+/i, '') : null;
+    if (!ti.present || ti.problems.length) {
+      const msg = ti.problems.length
+        ? `Meta token misconfigured: ${ti.problems.join(' ')}`
+        : 'META_SYSTEM_USER_TOKEN is not set on this deployment. Vercel environment variables only apply to a NEW deployment — set it, then redeploy.';
+      return NextResponse.json({ number, needs_pin: false, steps: [], error: msg, mode: 'unconfigured' }, { status: 503 });
     }
 
     // The PIN is required by /register (Cloud API number registration), not by agent onboarding.
