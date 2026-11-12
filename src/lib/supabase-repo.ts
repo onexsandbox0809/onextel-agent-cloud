@@ -56,6 +56,15 @@ export async function sbNumbers(tenantId: string | null): Promise<PhoneNumber[]>
   return (data || []) as PhoneNumber[];
 }
 
+export async function sbUpdateNumber(n: PhoneNumber) {
+  const sb = serviceSupabase();
+  const { error } = await sb.from('phone_numbers').update({
+    status: n.status, agent_id: n.agent_id, registered_at: n.registered_at,
+    two_step_pin_set: n.two_step_pin_set, meta_agent_id: n.meta_agent_id ?? null,
+  }).eq('id', n.id);
+  if (error) throw new Error(error.message);
+}
+
 export async function sbConversations(tenantId: string | null): Promise<Conversation[]> {
   const sb = serviceSupabase();
   let q = sb.from('conversations').select('*').order('updated_at', { ascending: false }).limit(50);

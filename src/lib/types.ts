@@ -43,6 +43,7 @@ export interface PhoneNumber {
   category: string;
   registered_at: string | null;
   two_step_pin_set: boolean;
+  meta_agent_id?: string | null;
 }
 
 export interface AgentSettings {
