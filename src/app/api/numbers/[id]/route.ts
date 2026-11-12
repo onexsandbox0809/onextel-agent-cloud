@@ -20,7 +20,7 @@ async function persist(n: PhoneNumber) {
   if (!isDemo()) await sbUpdateNumber(n);
 }
 
-export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!canWrite(session)) return forbidden();
@@ -146,4 +146,25 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   Object.assign(number, body);
   await persist(number);
   return NextResponse.json({ number });
+}
+
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    return await handle(req, ctx);
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    const hint = /meta_agent_id/i.test(raw)
+      ? 'The database is missing a column this build needs. Run in Supabase SQL editor: alter table public.phone_numbers add column if not exists meta_agent_id text;'
+      : /schema cache|column .* does not exist|Could not find the/i.test(raw)
+      ? 'Your Supabase schema is behind this build. Re-run supabase/schema.sql in the SQL editor (it is safe to re-run).'
+      : /relation .* does not exist/i.test(raw)
+      ? 'A table is missing. Run supabase/schema.sql in the SQL editor.'
+      : /SUPABASE|fetch failed|ECONN|getaddrinfo/i.test(raw)
+      ? 'Cannot reach Supabase. Check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel → Settings → Environment Variables, then redeploy.'
+      : undefined;
+    return NextResponse.json(
+      { error: `Registration failed server-side: ${raw}${hint ? ` — ${hint}` : ''}`, hint, steps: [] },
+      { status: 500 },
+    );
+  }
 }

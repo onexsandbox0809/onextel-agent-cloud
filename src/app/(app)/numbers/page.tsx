@@ -130,7 +130,7 @@ export default function NumbersPage() {
                 </select>
               </Field>
             )}
-            <Field label="Display number" hint="As customers see it">
+            <Field label="Display number" hint="The phone number itself, e.g. +91 63600 12345 — display only, never used in the API call">
               <input className="input" autoFocus value={form.display} placeholder="+91 63600 12345"
                 onChange={(e) => setForm({ ...form, display: e.target.value })} />
             </Field>
@@ -143,7 +143,7 @@ export default function NumbersPage() {
               <input className="input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
             </Field>
             <Field label="Phone number ID (Meta)" hint="From WhatsApp → API Setup — required to register a real number">
-              <input className="input mono" value={form.wa_phone_number_id} placeholder="109876543210987"
+              <input className="input mono" value={form.wa_phone_number_id} placeholder="1312665798592137"
                 onChange={(e) => setForm({ ...form, wa_phone_number_id: e.target.value })} />
             </Field>
             <Field label="WABA ID" hint="WhatsApp Business Account ID">
