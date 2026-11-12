@@ -1,4 +1,5 @@
 import { GRAPH_VERSION } from './env';
+import { logMetaCall } from './meta-log';
 
 /**
  * Meta Business Agent (WhatsApp) Graph client.
@@ -53,16 +54,28 @@ export async function graph<T = any>(
     apiVersion?: string | null;
     base?: string;
     versioned?: boolean;
+    context?: Record<string, unknown>;
   } = {},
 ): Promise<GraphResult<T>> {
   const token = metaToken(opts.token);
   if (!token) {
+    logMetaCall({
+      method: opts.method || 'GET', url: '(not sent)', apiVersion: opts.apiVersion ?? null,
+      reqHeaders: {}, payload: opts.body, error: 'No META_SYSTEM_USER_TOKEN configured — nothing was sent to Meta.',
+      context: opts.context,
+    });
     return { ok: false, status: 0, skipped: true, error: 'No Meta access token configured for this tenant. Add one under Settings → API credentials.' };
   }
   const base = opts.base || API_BASE;
   const clean = path.replace(/^\//, '');
   const url = opts.versioned ? `${base}/${GRAPH_VERSION}/${clean}` : `${base}/${clean}`;
   const hasBody = opts.body !== undefined && opts.body !== null;
+  const started = Date.now();
+  const reqHeaders: Record<string, string> = {
+    Authorization: `Bearer ****${token.slice(-4)} (${token.length} chars)`,
+    'Content-Type': 'application/json',
+  };
+  if (opts.apiVersion !== null) reqHeaders['X-API-Version'] = opts.apiVersion || '2.0.0';
   try {
     const res = await fetch(url, {
       method: opts.method || 'GET',
@@ -77,26 +90,38 @@ export async function graph<T = any>(
     const text = await res.text();
     let data: any = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    const error = res.ok ? undefined : (data?.error?.message || `Graph API error ${res.status}`);
+    logMetaCall({
+      method: opts.method || 'GET', url, apiVersion: opts.apiVersion ?? null,
+      reqHeaders, payload: opts.body, status: res.status, ok: res.ok, ms: Date.now() - started,
+      response: data, error, context: opts.context,
+    });
     if (!res.ok) {
-      return { ok: false, status: res.status, data, error: data?.error?.message || `Graph API error ${res.status}` };
+      return { ok: false, status: res.status, data, error: error! };
     }
     return { ok: true, status: res.status, data };
   } catch (e) {
-    return { ok: false, status: 0, error: e instanceof Error ? e.message : 'Network error' };
+    const msg = e instanceof Error ? e.message : 'Network error';
+    logMetaCall({
+      method: opts.method || 'GET', url, apiVersion: opts.apiVersion ?? null,
+      reqHeaders, payload: opts.body, error: `network: ${msg}`, ms: Date.now() - started,
+      context: opts.context,
+    });
+    return { ok: false, status: 0, error: msg };
   }
 }
 
 export const meta = {
   // ── graph.facebook.com/v25.0 — Cloud API number registration (no X-API-Version) ──
-  registerNumber: (entityId: string, pin: string, token?: string | null) =>
+  registerNumber: (entityId: string, pin: string, token?: string | null, context?: Record<string, unknown>) =>
     graph(`${entityId}/register`, {
       method: 'POST', body: { messaging_product: 'whatsapp', pin }, token,
-      apiVersion: null, base: GRAPH_BASE, versioned: true,
+      apiVersion: null, base: GRAPH_BASE, versioned: true, context,
     }),
 
   // ── api.facebook.com — Business Agent surface (unversioned paths) ──
-  onboarding: (entityId: string, token?: string | null) =>
-    graph(`${entityId}/agent_onboarding?channel=whatsapp`, { method: 'POST', body: '', token, apiVersion: '2.0.0' }),
+  onboarding: (entityId: string, token?: string | null, context?: Record<string, unknown>) =>
+    graph(`${entityId}/agent_onboarding?channel=whatsapp`, { method: 'POST', body: '', token, apiVersion: '2.0.0', context }),
 
   putSettings: (entityId: string, agentId: string, settings: unknown, token?: string | null) =>
     graph(`${entityId}/agent_config/settings?agent_id=${encodeURIComponent(agentId)}`, {

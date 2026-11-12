@@ -56,14 +56,34 @@ export async function sbNumbers(tenantId: string | null): Promise<PhoneNumber[]>
   return (data || []) as PhoneNumber[];
 }
 
+let metaAgentColumnMissing = false;
+
 export async function sbUpdateNumber(n: PhoneNumber) {
   const sb = serviceSupabase();
-  const { error } = await sb.from('phone_numbers').update({
+  const row: Record<string, unknown> = {
     status: n.status, agent_id: n.agent_id, registered_at: n.registered_at,
-    two_step_pin_set: n.two_step_pin_set, meta_agent_id: n.meta_agent_id ?? null,
+    two_step_pin_set: n.two_step_pin_set,
     display: n.display, wa_phone_number_id: n.wa_phone_number_id, waba_id: n.waba_id,
-  }).eq('id', n.id);
-  if (error) throw new Error(error.message);
+  };
+  if (!metaAgentColumnMissing) row.meta_agent_id = n.meta_agent_id ?? null;
+
+  const { error } = await sb.from('phone_numbers').update(row).eq('id', n.id);
+  if (!error) return;
+  // Schema behind the build: persist everything else rather than failing the whole write.
+  if (/meta_agent_id/i.test(error.message)) {
+    metaAgentColumnMissing = true;
+    delete row.meta_agent_id;
+    const retry = await sb.from('phone_numbers').update(row).eq('id', n.id);
+    if (retry.error) throw new Error(retry.error.message);
+    return;
+  }
+  throw new Error(error.message);
+}
+
+export function schemaWarnings() {
+  return metaAgentColumnMissing
+    ? ['phone_numbers.meta_agent_id column is missing — the agent ID is shown but not persisted. Run: alter table public.phone_numbers add column if not exists meta_agent_id text;']
+    : [];
 }
 
 export async function sbNumber(id: string): Promise<PhoneNumber | null> {

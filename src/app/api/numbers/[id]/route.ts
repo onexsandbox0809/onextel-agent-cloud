@@ -84,7 +84,8 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
     const pn = digits(number.wa_phone_number_id);
 
     // ── Step 1: POST graph.facebook.com/v25.0/<pn>/register {messaging_product, pin} ──
-    const reg = await meta.registerNumber(pn, pin, token);
+    const ctx = { actor: session.user.email, tenant: number.tenant_id, number: number.display, phone_number_id: pn, action: 'register' };
+    const reg = await meta.registerNumber(pn, pin, token, ctx);
     const regMsg = `${reg.error || ''} ${String((reg.data as any)?.error?.message || '')}`;
     const already = !reg.ok && /already (been )?registered|already_registered|is already registered/i.test(regMsg);
     steps.push({
@@ -108,7 +109,7 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
     }
 
     // ── Step 2: POST api.facebook.com/<pn>/agent_onboarding?channel=whatsapp ──
-    const onboard = await meta.onboarding(pn, token);
+    const onboard = await meta.onboarding(pn, token, { ...ctx, action: 'agent_onboarding' });
     steps.push({
       step: 'agent_onboarding', host: 'api.facebook.com', ok: onboard.ok, http: onboard.status,
       error: onboard.ok ? null : onboard.error || null, data: onboard.data ?? null,

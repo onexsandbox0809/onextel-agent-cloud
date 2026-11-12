@@ -10,6 +10,7 @@ export default function Settings() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', kind: 'graph_token', value: '', environment: 'production', tenant_id: '' });
   const { push } = useToast();
+  const logs = useApi<{ file: string; storage: string; text: string; status: any; lines: number }>('/api/logs');
   if (ses.loading || !ses.data) return <Skeleton h={420} />;
   const t = ses.data.tenant;
 
@@ -27,6 +28,31 @@ export default function Settings() {
 
       <div className="split-2">
         <div className="stack">
+          <Card>
+            <div className="card-head">
+              <div className="card-title">Meta API request log</div>
+              <span className="badge info" style={{ marginLeft: 'auto' }}>{logs.data?.storage === 'ok' ? 'STORAGE · logs' : 'MEMORY ONLY'}</span>
+            </div>
+            <div style={{ padding: '0 18px 14px' }}>
+              <div className="small muted">
+                Every call to <span className="mono tiny">graph.facebook.com</span> / <span className="mono tiny">api.facebook.com</span> is recorded with its exact URL,
+                headers (token redacted), payload, status and response. Stored as a daily <span className="mono tiny">.txt</span> in the Supabase Storage
+                bucket <span className="mono tiny">logs</span> so it survives restarts.
+              </div>
+              <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                <a className="btn btn-primary btn-sm" href="/api/logs?download=1" download>Download log (.txt)</a>
+                <button className="btn btn-sm" onClick={() => logs.reload()}>Refresh</button>
+                <span className="mono tiny dim">{logs.data?.file || '—'} · {logs.data?.lines || 0} lines</span>
+              </div>
+              {logs.data?.text ? (
+                <pre className="mono" style={{ marginTop: 10, maxHeight: 320, overflow: 'auto', background: 'var(--panel-2)', border: '1px solid var(--line)', padding: 10, fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+{logs.data.text.trim().split('\n').slice(-60).join('\n')}
+                </pre>
+              ) : (
+                <div className="tiny dim" style={{ marginTop: 10 }}>No Meta calls recorded yet. Register a number and this fills in.</div>
+              )}
+            </div>
+          </Card>
           <Card>
             <div className="card-head"><div className="card-title">Workspace</div><span className="badge info" style={{ marginLeft: 'auto' }}>{t?.plan.toUpperCase() || 'PLATFORM'}</span></div>
             <div className="card-pad grid g2">
