@@ -42,6 +42,12 @@ export async function sbInsertAgent(a: Agent) {
   if (error) throw new Error(error.message);
 }
 
+export async function sbInsertNumber(n: PhoneNumber) {
+  const sb = serviceSupabase();
+  const { error } = await sb.from('phone_numbers').insert(n);
+  if (error) throw new Error(error.message);
+}
+
 export async function sbNumbers(tenantId: string | null): Promise<PhoneNumber[]> {
   const sb = serviceSupabase();
   let q = sb.from('phone_numbers').select('*').order('created_at', { ascending: true });

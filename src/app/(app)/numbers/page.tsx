@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api, Badge, Card, Empty, Field, fmt, Modal, Skeleton, Status, useApi, useToast } from '@/components/ui';
 import { IconPhone, IconPlus, IconShield, IconBolt } from '@/components/icons';
@@ -13,8 +13,18 @@ export default function NumbersPage() {
   const [reg, setReg] = useState<PhoneNumber | null>(null);
   const [pin, setPin] = useState('123456');
   const [form, setForm] = useState({ display: '', country: 'IN', category: 'OTHER', wa_phone_number_id: '', waba_id: '', tenant_id: '' });
+  const [err, setErr] = useState('');
+  const [saving, setSaving] = useState(false);
   const { push } = useToast();
+
+  // platform admins must pick a tenant — prefill the first one so provisioning works
+  useEffect(() => {
+    if (ses.data?.user.role === 'platform_admin' && !form.tenant_id && ses.data.tenants.length) {
+      setForm((f) => ({ ...f, tenant_id: ses.data!.tenants[0].id }));
+    }
+  }, [ses.data]);
   const isAdmin = ses.data?.user.role === 'platform_admin';
+  const tenantDefault = ses.data?.tenants[0]?.id || '';
 
   const register = async () => {
     if (!reg) return;
@@ -25,8 +35,19 @@ export default function NumbersPage() {
     } catch (e) { push(e instanceof Error ? e.message : 'Failed', true); }
   };
   const create = async () => {
-    try { await api('/api/numbers', 'POST', form); push('Number provisioned through Onextel — register it next.'); setAdd(false); reload(); }
-    catch (e) { push(e instanceof Error ? e.message : 'Failed', true); }
+    setErr('');
+    if (!form.display.trim()) { setErr('Enter the WhatsApp display number.'); return; }
+    if (isAdmin && !form.tenant_id) { setErr('Select the tenant that owns this number.'); return; }
+    setSaving(true);
+    try {
+      await api('/api/numbers', 'POST', form);
+      push('Number provisioned — register it with Meta next.');
+      setAdd(false);
+      setForm({ display: '', country: 'IN', category: 'OTHER', wa_phone_number_id: '', waba_id: '', tenant_id: tenantDefault });
+      reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not provision the number.');
+    } finally { setSaving(false); }
   };
 
   return (
@@ -52,7 +73,14 @@ export default function NumbersPage() {
 
       <Card>
         <div className="card-head"><div className="card-title">Connected numbers</div><span className="badge info" style={{ marginLeft: 'auto' }}>PROVIDER · ONEXTEL</span></div>
-        {loading ? <div style={{ padding: 16 }}><Skeleton h={140} /></div> : (
+        {!loading && (data?.numbers.length || 0) === 0 ? (
+          <Empty
+            icon={<IconPhone width={16} height={16} />}
+            title="No numbers yet"
+            sub="Provision your WhatsApp Business number, then register it with Meta and bind it to an agent."
+            action={<button className="btn btn-primary btn-sm" onClick={() => setAdd(true)}>Provision number</button>}
+          />
+        ) : loading ? <div style={{ padding: 16 }}><Skeleton h={140} /></div> : (
           <table className="tbl">
             <thead><tr><th>Number</th><th>Status</th><th>Quality</th><th>Bound agent</th><th>Meta IDs</th><th>Provider ref</th><th className="right">Actions</th></tr></thead>
             <tbody>
@@ -84,7 +112,7 @@ export default function NumbersPage() {
       </div>
 
       <Modal title="Provision a WhatsApp number" sub="Provisioned through Onextel, then registered with Meta." onClose={() => setAdd(false)}
-        footer={<><button className="btn" onClick={() => setAdd(false)}>Cancel</button><button className="btn btn-primary" onClick={create} disabled={!form.display}>Provision</button></>}>
+        footer={<><button className="btn" onClick={() => setAdd(false)}>Cancel</button><button className="btn btn-primary" onClick={create} disabled={saving || !form.display.trim()}>{saving ? 'Provisioning…' : 'Provision'}</button></>}>
         <div className="stack">
           {isAdmin && <Field label="Tenant"><select className="select" value={form.tenant_id} onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}><option value="">Select tenant…</option>{ses.data?.tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
           <Field label="Display number"><input className="input" placeholder="+91 63600 12345" value={form.display} onChange={(e) => setForm({ ...form, display: e.target.value })} /></Field>
@@ -94,6 +122,10 @@ export default function NumbersPage() {
           </div>
           <Field label="Phone number ID (Meta)" hint="Optional — generated if blank"><input className="input mono" value={form.wa_phone_number_id} onChange={(e) => setForm({ ...form, wa_phone_number_id: e.target.value })} /></Field>
           <Field label="WABA ID" hint="Optional — generated if blank"><input className="input mono" value={form.waba_id} onChange={(e) => setForm({ ...form, waba_id: e.target.value })} /></Field>
+          {err && <div className="notice err" style={{ gridColumn: '1 / -1' }}>{err}</div>}
+          <div className="notice info" style={{ gridColumn: '1 / -1' }}>
+            Provisioning creates the record in this platform. Click <b>Register</b> on the row afterwards to call Meta.
+          </div>
         </div>
       </Modal>
 

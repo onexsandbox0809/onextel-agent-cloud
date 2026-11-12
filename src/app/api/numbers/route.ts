@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth';
 import { canWrite, forbidden, scopeOf } from '@/lib/session-util';
 import { db, newId, recordAudit } from '@/lib/demo-db';
 import { isDemo } from '@/lib/env';
-import { sbNumbers } from '@/lib/supabase-repo';
+import { sbInsertNumber, sbNumbers } from '@/lib/supabase-repo';
 
 export async function GET() {
   const session = await getSession();
@@ -18,9 +18,17 @@ export async function POST(req: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!canWrite(session)) return forbidden();
   const body = await req.json();
-  if (!body.display) return NextResponse.json({ error: 'Phone number is required.' }, { status: 400 });
+  if (!body.display || !String(body.display).trim()) {
+    return NextResponse.json({ error: 'Display number is required.' }, { status: 400 });
+  }
   const tenant_id = session.user.role === 'platform_admin' ? body.tenant_id : session.user.tenant_id;
-  if (!tenant_id) return NextResponse.json({ error: 'Tenant is required.' }, { status: 400 });
+  if (!tenant_id) {
+    return NextResponse.json({
+      error: session.user.role === 'platform_admin'
+        ? 'Select which tenant owns this number.'
+        : 'Your account is not linked to a tenant. Ask a platform admin to assign you one.',
+    }, { status: 400 });
+  }
 
   const number = {
     id: newId('pn'), tenant_id, agent_id: null, display: body.display,
@@ -30,6 +38,15 @@ export async function POST(req: Request) {
     status: 'pending_registration' as const, quality: 'green' as const, messaging_limit: '1K / 24h',
     country: body.country || 'IN', category: body.category || 'OTHER', registered_at: null, two_step_pin_set: false,
   };
-  if (isDemo()) { db().numbers.push(number); recordAudit(tenant_id, session.user.email, 'number.provision', number.display); }
+  try {
+    if (isDemo()) {
+      db().numbers.push(number);
+      recordAudit(tenant_id, session.user.email, 'number.provision', number.display);
+    } else {
+      await sbInsertNumber(number);
+    }
+  } catch (e) {
+    return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not save the number.' }, { status: 500 });
+  }
   return NextResponse.json({ number }, { status: 201 });
 }
