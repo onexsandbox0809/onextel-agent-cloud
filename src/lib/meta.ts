@@ -157,6 +157,10 @@ export const meta = {
   deleteFaq: (entityId: string, faqId: string, token?: string | null) =>
     graph(`${entityId}/agent_config/faq/${encodeURIComponent(faqId)}`, { method: 'DELETE', token, apiVersion: '2.0.0' }),
 
+  listSkills: (entityId: string, agentId: string, token?: string | null) =>
+    graph(`${entityId}/agent_config/skills?agent_id=${encodeURIComponent(agentId)}`, {
+      method: 'GET', token, apiVersion: '2.0.0',
+    }),
   createSkill: (entityId: string, agentId: string, skill: unknown, token?: string | null) =>
     graph(`${entityId}/agent_config/skills?agent_id=${encodeURIComponent(agentId)}`, {
       method: 'POST', body: skill, token, apiVersion: '2.0.0',
@@ -211,6 +215,7 @@ export const META_ENDPOINTS = [
   { op: 'Update FAQ', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/faq/{fid}', version: '2.0.0', note: 'id may change' },
   { op: 'Delete FAQ', method: 'DELETE', host: 'api.facebook.com', path: '{id}/agent_config/faq/{fid}', version: '2.0.0', note: '204 on success' },
   { op: 'Create skill', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/skills?agent_id=', version: '2.0.0', note: '' },
+  { op: 'List skills', method: 'GET', host: 'api.facebook.com', path: '{id}/agent_config/skills?agent_id=', version: '2.0.0', note: 'read back for the grid' },
   { op: 'Create connector', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },
   { op: 'List connectors', method: 'GET', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },
   { op: 'Create tool', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors/{cid}/tools', version: '2.0.0', note: '' },

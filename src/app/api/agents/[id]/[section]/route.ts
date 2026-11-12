@@ -81,9 +81,17 @@ export async function POST(req: Request, ctx: Ctx) {
       if (!body.title?.trim() || !body.skill?.trim()) return NextResponse.json({ error: 'Title and skill instructions are required.' }, { status: 400 });
       const skill = { id: newId('sk'), title: body.title, description: body.description || `Apply for: ${body.title}`, skill: body.skill, enabled: body.enabled !== false, updated_at: nowIso() };
       await persist(agent, { skills: [skill, ...agent.skills] } as Partial<Agent>);
-      const remote = token && agent.meta_agent_id ? await meta.createSkill(entityId, (await resolveAgentId(agent)).agentId as string, { title: skill.title, description: skill.description, skill: skill.skill }, token) : null;
+      const skAgent = (await resolveAgentId(agent)).agentId;
+      const remote = token && skAgent
+        ? await meta.createSkill(entityId, skAgent, { title: skill.title, description: skill.description, skill: skill.skill }, token)
+        : null;
+      if (remote?.ok) {
+        (skill as any).meta_id = (remote.data as any)?.id ?? null;
+        (skill as any).synced = true;
+        await persist(agent, { skills: agent.skills } as Partial<Agent>);
+      }
       recordAudit(agent.tenant_id, session.user.email, 'skill.create', skill.title);
-      return NextResponse.json({ skill, remote });
+      return NextResponse.json({ skill, remote, meta_id: (skill as any).meta_id ?? null });
     }
     case 'connectors': {
       if (!body.name?.trim() || !body.base_url?.trim()) return NextResponse.json({ error: 'Connector name and base URL are required.' }, { status: 400 });
@@ -169,32 +177,79 @@ export async function POST(req: Request, ctx: Ctx) {
       return NextResponse.json({ agent, remote, mode: 'graph' });
     }
     case 'sync': {
-      // Re-push every local FAQ and skill. HTTP 409 Duplicate is treated as success,
-      // so this is safe to run repeatedly and fills in anything a partial import missed.
+      // Two modes:
+      //  - { kind, offset, limit } -> pushes ONE chunk and reports progress, so the UI can
+      //    draw a real progress bar instead of waiting blind on a long request.
+      //  - {} -> legacy full push of everything.
+      // HTTP 409 Duplicate is always treated as success, so this is safe to re-run.
       if (!token) return NextResponse.json({ error: 'No Meta token on this deployment — nothing was sent.' }, { status: 503 });
       if (!/^\d{10,20}$/.test(entityId)) return NextResponse.json({ error: 'No Meta phone number ID bound to this agent. Bind a number first.' }, { status: 400 });
 
       const dup = (r: any) => !!r && r.ok === false && (r.status === 409 || /duplicate/i.test(String(r.error || '')));
+
+      const kind = body.kind as 'faqs' | 'skills' | undefined;
+      if (kind === 'faqs' || kind === 'skills') {
+        const offset = Math.max(0, Number(body.offset ?? 0));
+        const limit = Math.min(10, Math.max(1, Number(body.limit ?? 4)));
+
+        if (kind === 'faqs') {
+          const total = agent.faqs.length;
+          const batch = agent.faqs.slice(offset, offset + limit);
+          let pushed = 0, duplicates = 0, failed = 0;
+          const errors: string[] = [];
+          const res = await Promise.all(batch.map((f) => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token)
+            .catch((e) => ({ ok: false, status: 0, error: String(e) }))));
+          res.forEach((r: any, j) => {
+            if (r?.ok) { pushed++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? (batch[j] as any).meta_id ?? null; }
+            else if (dup(r)) { duplicates++; batch[j].synced = true; }
+            else { failed++; batch[j].synced = false; if (errors.length < 3) errors.push(`${batch[j].question.slice(0, 40)}: ${r?.error || 'error'}`); }
+          });
+          await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+          const next = offset + batch.length;
+          return NextResponse.json({ agent, kind, mode: 'graph', total, next, done: next >= total, pushed, duplicates, failed, errors });
+        }
+
+        const skAgent = (await resolveAgentId(agent)).agentId;
+        if (!skAgent) {
+          return NextResponse.json({
+            error: 'No Meta agent ID on this agent or its bound number. Skills are pushed with ?agent_id=, so onboarding must succeed first.',
+          }, { status: 400 });
+        }
+        const total = agent.skills.length;
+        const batch = agent.skills.slice(offset, offset + limit);
+        let pushed = 0, duplicates = 0, failed = 0;
+        const errors: string[] = [];
+        const res = await Promise.all(batch.map((sk) => meta.createSkill(entityId, skAgent, { title: sk.title, description: sk.description, skill: sk.skill }, token)
+          .catch((e) => ({ ok: false, status: 0, error: String(e) }))));
+        res.forEach((r: any, j) => {
+          if (r?.ok) { pushed++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? (batch[j] as any).meta_id ?? null; }
+          else if (dup(r)) { duplicates++; batch[j].synced = true; }
+          else { failed++; batch[j].synced = false; if (errors.length < 3) errors.push(`${batch[j].title}: ${r?.error || 'error'}`); }
+        });
+        await persist(agent, { skills: agent.skills } as Partial<Agent>);
+        const next = offset + batch.length;
+        return NextResponse.json({ agent, kind, mode: 'graph', total, next, done: next >= total, pushed, duplicates, failed, errors });
+      }
+
+      // legacy full push
       let faqOk = 0, faqDup = 0, faqFail = 0, skillOk = 0, skillDup = 0, skillFail = 0;
       const errors: string[] = [];
-
       for (let i = 0; i < agent.faqs.length; i += 4) {
         const batch = agent.faqs.slice(i, i + 4);
         const res = await Promise.all(batch.map((f) => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
         res.forEach((r: any, j) => {
-          if (r?.ok) { faqOk++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? null; }
+          if (r?.ok) { faqOk++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? (batch[j] as any).meta_id ?? null; }
           else if (dup(r)) { faqDup++; batch[j].synced = true; }
           else { faqFail++; batch[j].synced = false; if (errors.length < 5) errors.push(`${batch[j].question.slice(0, 40)}: ${r?.error || 'error'}`); }
         });
       }
-
       const syncAgentId = (await resolveAgentId(agent)).agentId;
       if (syncAgentId) {
         for (let i = 0; i < agent.skills.length; i += 4) {
           const batch = agent.skills.slice(i, i + 4);
           const res = await Promise.all(batch.map((sk) => meta.createSkill(entityId, syncAgentId as string, { title: sk.title, description: sk.description, skill: sk.skill }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
           res.forEach((r: any, j) => {
-            if (r?.ok) { skillOk++; batch[j].synced = true; }
+            if (r?.ok) { skillOk++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? (batch[j] as any).meta_id ?? null; }
             else if (dup(r)) { skillDup++; batch[j].synced = true; }
             else { skillFail++; batch[j].synced = false; if (errors.length < 8) errors.push(`${batch[j].title}: ${r?.error || 'error'}`); }
           });
@@ -378,7 +433,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { id, section } = await ctx.params;
-  if (section !== 'faqs') return NextResponse.json({ error: 'Use POST/PUT/DELETE for this section.' }, { status: 405 });
+  if (section !== 'faqs' && section !== 'skills') return NextResponse.json({ error: 'Use POST/PUT/DELETE for this section.' }, { status: 405 });
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
@@ -387,6 +442,53 @@ export async function GET(req: Request, ctx: Ctx) {
   const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
   if (!token) return NextResponse.json({ error: 'No Meta token on this deployment — cannot read FAQ state from Meta.' }, { status: 503 });
   if (!/^\d{10,20}$/.test(agent.entity_id)) return NextResponse.json({ error: 'No Meta phone number ID bound to this agent.' }, { status: 400 });
+
+  if (section === 'skills') {
+    const skAgent = (await resolveAgentId(agent)).agentId;
+    if (!skAgent) {
+      return NextResponse.json({
+        error: 'No Meta agent ID on this agent or its bound number — the skills list is keyed by ?agent_id=. Register the number first (Numbers → Re-run).',
+      }, { status: 400 });
+    }
+    const remote = await meta.listSkills(agent.entity_id, skAgent, token);
+    if (!remote.ok) return NextResponse.json({ error: remote.error || `Meta returned ${remote.status}`, status: remote.status }, { status: 502 });
+
+    const raw = remote.data as any;
+    const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data
+      : Array.isArray(raw?.skills) ? raw.skills : [];
+    const norm = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const byTitle = new Map(list.map((f) => [norm(f.title ?? f.name), f]));
+    const byId = new Map(list.map((f) => [String(f.id), f]));
+
+    let matched = 0;
+    agent.skills = agent.skills.map((sk) => {
+      const hit = (sk as any).meta_id ? byId.get(String((sk as any).meta_id)) : byTitle.get(norm(sk.title));
+      if (hit) { matched++; return { ...sk, meta_id: hit.id, synced: true, status: hit.status ?? (sk as any).status } as any; }
+      return { ...sk, synced: false } as any;
+    });
+
+    const localTitles = new Set(agent.skills.map((sk) => norm(sk.title)));
+    const adopted: any[] = [];
+    for (const f of list) {
+      const title = String(f?.title ?? f?.name ?? '');
+      if (!title || localTitles.has(norm(title))) continue;
+      localTitles.add(norm(title));
+      adopted.push({
+        id: newId('sk'), title, description: String(f.description ?? 'Imported from Meta'),
+        skill: String(f.skill ?? ''), enabled: true, updated_at: nowIso(),
+        meta_id: f.id ?? null, synced: true, status: f.status ?? null,
+      });
+    }
+    agent.skills = [...agent.skills, ...adopted];
+    await persist(agent, { skills: agent.skills } as Partial<Agent>);
+    if (adopted.length) recordAudit(agent.tenant_id, session.user.email, 'skill.import_from_meta', `${adopted.length} entries`);
+
+    return NextResponse.json({
+      agent, mode: 'graph', http: remote.status,
+      meta: { total: list.length, matched, adopted: adopted.length, local: agent.skills.length },
+      skills: list,
+    });
+  }
 
   const remote = await meta.listFaqs(agent.entity_id, token);
   if (!remote.ok) return NextResponse.json({ error: remote.error || `Meta returned ${remote.status}`, status: remote.status }, { status: 502 });
@@ -399,7 +501,6 @@ export async function GET(req: Request, ctx: Ctx) {
   const byQuestion = new Map(list.map((f) => [norm(f.question), f]));
   const byId = new Map(list.map((f) => [String(f.id), f]));
 
-  // 1) mark what we already hold
   let matched = 0;
   agent.faqs = agent.faqs.map((f) => {
     const hit = (f as any).meta_id ? byId.get(String((f as any).meta_id)) : byQuestion.get(norm(f.question));
@@ -407,7 +508,6 @@ export async function GET(req: Request, ctx: Ctx) {
     return { ...f, synced: false, meta_id: null };
   });
 
-  // 2) pull in anything Meta has that we do not — this is what makes the grid show 22
   const localQuestions = new Set(agent.faqs.map((f) => norm(f.question)));
   const adopted: any[] = [];
   for (const f of list) {
@@ -419,13 +519,9 @@ export async function GET(req: Request, ctx: Ctx) {
       meta_id: f.id ?? null, synced: true,
     });
   }
-  if (adopted.length) {
-    agent.faqs = [...agent.faqs, ...adopted];
-    await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
-    recordAudit(agent.tenant_id, session.user.email, 'faq.import_from_meta', `${adopted.length} entries`);
-  } else {
-    await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
-  }
+  agent.faqs = [...agent.faqs, ...adopted];
+  await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+  if (adopted.length) recordAudit(agent.tenant_id, session.user.email, 'faq.import_from_meta', `${adopted.length} entries`);
 
   return NextResponse.json({
     agent, mode: 'graph', http: remote.status,

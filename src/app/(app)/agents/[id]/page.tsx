@@ -1,11 +1,32 @@
 'use client';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
-import { api, Badge, Card, Empty, Field, fmt, Modal, Skeleton, Status, Toggle, useApi, useToast } from '@/components/ui';
+import { useMemo, useRef, useState } from 'react';
+import { api, Badge, Card, Empty, Field, fmt, Modal, ProgressBar, Skeleton, Status, Toggle, useApi, useToast } from '@/components/ui';
 import { IconBolt, IconBook, IconCheck, IconFlask, IconPlug, IconPlus, IconRocket, IconSend, IconSettings, IconShield, IconTrash, IconX, IconChevron, IconPhone } from '@/components/icons';
 import type { Agent, BusinessInfo, Connector, ConnectorTool, EvalCase, Faq, Session, Skill } from '@/lib/types';
 import { eligibilityPreflight } from '@/lib/meta';
+
+async function pushChunked(
+  agentId: string,
+  kind: 'faqs' | 'skills',
+  onProgress: (done: number, total: number) => void,
+) {
+  let offset = 0;
+  const agg = { pushed: 0, duplicates: 0, failed: 0, total: 0, errors: [] as string[] };
+  for (let guard = 0; guard < 300; guard++) {
+    const r = await api<any>(`/api/agents/${agentId}/sync`, 'POST', { kind, offset, limit: 4 });
+    agg.pushed += r.pushed || 0;
+    agg.duplicates += r.duplicates || 0;
+    agg.failed += r.failed || 0;
+    agg.total = r.total ?? agg.total;
+    if (r.errors?.length) agg.errors.push(...r.errors);
+    offset = r.next ?? offset + 4;
+    onProgress(Math.min(offset, agg.total), agg.total);
+    if (r.done || agg.total === 0) break;
+  }
+  return agg;
+}
 
 const tabs = [
   { key: 'overview', label: 'Overview', icon: IconBolt },
@@ -194,18 +215,23 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
 
   const syncAll = async () => {
     setSyncing(true);
+    setProg({ done: 0, total: agent.faqs.length + agent.skills.length, label: 'Pushing to Meta' });
     try {
-      const r = await api<any>(`/api/agents/${agent.id}/sync`, 'POST', {});
-      const f = r.faqs || {}, k = r.skills || {};
+      let done = 0;
+      const f = await pushChunked(agent.id, 'faqs', (d) => setProg({ done, total: agent.faqs.length + agent.skills.length, label: 'Pushing FAQs' })).finally(() => null);
+      done = 0;
+      const k = await pushChunked(agent.id, 'skills', (d) => setProg({ done: agent.faqs.length + d, total: agent.faqs.length + agent.skills.length, label: 'Pushing skills' }));
+      void done;
       push(`Meta now has ${f.pushed + f.duplicates}/${f.total} FAQs and ${k.pushed + k.duplicates}/${k.total} skills.` + (f.failed || k.failed ? ` ${f.failed + k.failed} failed.` : ''));
-      if (r.errors?.length) console.warn('sync errors', r.errors);
+      if (f.errors.length || k.errors.length) console.warn('sync errors', [...f.errors, ...k.errors]);
       reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Sync failed', true); }
-    finally { setSyncing(false); }
+    finally { setSyncing(false); setProg(null); }
   };
 
   const [metaState, setMetaState] = useState<{ total: number; matched: number } | null>(null);
   const [checking, setChecking] = useState(false);
+  const [prog, setProg] = useState<{ done: number; total: number; label: string } | null>(null);
 
   const checkMeta = async () => {
     setChecking(true);
@@ -259,6 +285,7 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
         </button>
         <button className="btn btn-primary btn-sm" onClick={() => { setEdit(null); setForm({ question: '', answer: '', category: 'General' }); setOpen(true); }}><IconPlus width={13} height={13} /> Add FAQ</button>
       </div>
+      {prog && <ProgressBar value={prog.done} total={prog.total} label={prog.label} />}
 
       {list.length > 0 && (
         <div className="row" style={{ marginBottom: 8, gap: 10, flexWrap: 'wrap' }}>
@@ -322,17 +349,32 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [prog, setProg] = useState<{ done: number; total: number; label: string } | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [metaState, setMetaState] = useState<{ total: number; matched: number; adopted: number } | null>(null);
   const { push } = useToast();
 
   const syncAll = async () => {
     setSyncing(true);
+    setProg({ done: 0, total: agent.skills.length, label: 'Pushing skills to Meta' });
     try {
-      const r = await api<any>(`/api/agents/${agent.id}/sync`, 'POST', {});
-      const f = r.faqs || {}, k = r.skills || {};
-      push(`Meta now has ${f.pushed + f.duplicates}/${f.total} FAQs and ${k.pushed + k.duplicates}/${k.total} skills.` + (f.failed || k.failed ? ` ${f.failed + k.failed} failed.` : ''));
+      const k = await pushChunked(agent.id, 'skills', (d, t) => setProg({ done: d, total: t, label: 'Pushing skills to Meta' }));
+      push(`Meta now has ${k.pushed + k.duplicates}/${k.total} skills.` + (k.failed ? ` ${k.failed} failed.` : ''));
+      if (k.errors.length) console.warn('skill sync errors', k.errors);
       reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Sync failed', true); }
-    finally { setSyncing(false); }
+    finally { setSyncing(false); setProg(null); }
+  };
+
+  const checkMeta = async () => {
+    setChecking(true);
+    try {
+      const r = await api<any>(`/api/agents/${agent.id}/skills`, 'GET');
+      setMetaState({ total: r.meta?.total ?? 0, matched: r.meta?.matched ?? 0, adopted: r.meta?.adopted ?? 0 });
+      push(`Meta has ${r.meta?.total ?? 0} skills · ${r.meta?.matched ?? 0} already here · ${r.meta?.adopted ?? 0} imported into the grid.`);
+      reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Could not read skills from Meta', true); }
+    finally { setChecking(false); }
   };
 
   const allSel = agent.skills.length > 0 && agent.skills.every((s) => sel.has(s.id));
@@ -365,7 +407,11 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
         Skills are instruction documents (Markdown) sent to <span className="mono">POST /agent_config/skills?agent_id=</span>. Keep them declarative — routing, tone, guardrails and flows.
       </div>
       <div className="row" style={{ marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
-        <span className="small dim">{agent.skills.length} skills · {agent.skills.filter((s) => s.enabled).length} enabled</span>
+        <span className="small dim">
+          {agent.skills.length} skills · {agent.skills.filter((s) => s.enabled).length} enabled
+          {agent.skills.length > 0 && <> · <b>{agent.skills.filter((s) => (s as any).synced).length} live on Meta</b></>}
+        </span>
+        <button className="btn btn-sm" disabled={checking} onClick={checkMeta}>{checking ? 'Fetching…' : 'Fetch from Meta'}</button>
         {agent.skills.length > 0 && (
           <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={allSel} onChange={toggleAll} />
@@ -386,6 +432,7 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
         </button>
         <button className="btn btn-primary btn-sm" onClick={() => { setEdit(null); setForm({ title: '', description: '', skill: '' }); setOpen(true); }}><IconPlus width={13} height={13} /> New skill</button>
       </div>
+      {prog && <ProgressBar value={prog.done} total={prog.total} label={prog.label} />}
       <div className="grid g2">
         {agent.skills.map((s) => (
           <Card key={s.id} className="card-pad" style={sel.has(s.id) ? { outline: '2px solid var(--accent)', outlineOffset: -1 } : undefined}>
@@ -396,6 +443,7 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
               </div>
               <div className="row" style={{ gap: 6 }}>
                 <Badge kind={s.enabled ? 'live' : 'draft'}>{s.enabled ? 'active' : 'off'}</Badge>
+                {(s as any).synced ? <Badge kind="live">live on Meta</Badge> : <Badge kind="draft">not on Meta</Badge>}
                 <button className="btn btn-ghost btn-sm" onClick={() => { setEdit(s); setForm({ title: s.title, description: s.description, skill: s.skill }); setOpen(true); }}>Edit</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => delMany([s.id])}><IconTrash width={12} height={12} /></button>
               </div>
@@ -723,6 +771,7 @@ function BulkUpload({ agentId, section, reload }: { agentId: string; section: 'f
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<any>(null);
   const [err, setErr] = useState('');
+  const [prog, setProg] = useState<{ done: number; total: number; label: string } | null>(null);
 
   const meta = {
     faqs: { title: 'Bulk upload FAQs', sub: 'Spreadsheet columns: question, answer, category (optional).', file: 'faqs-import.xlsx', csv: 'faqs-import.csv' },
@@ -740,6 +789,14 @@ function BulkUpload({ agentId, section, reload }: { agentId: string; section: 'f
       if (!r.ok) throw new Error(d.error || `Import failed (${r.status})`);
       setRes(d);
       reload();
+      // Rows are already in the database — now show the Meta push as it happens.
+      if (section !== 'connectors' && (d.imported ?? 0) > 0) {
+        setProg({ done: 0, total: d.imported, label: `Uploading ${section === 'faqs' ? 'FAQs' : 'skills'} to Meta` });
+        try {
+          await pushChunked(agentId, section, (done, total) => setProg({ done, total, label: `Uploading ${section === 'faqs' ? 'FAQs' : 'skills'} to Meta` }));
+        } catch { /* import already succeeded locally; push can be retried */ }
+        finally { setProg(null); reload(); }
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Import failed');
     } finally { setBusy(false); }
@@ -764,6 +821,7 @@ function BulkUpload({ agentId, section, reload }: { agentId: string; section: 'f
         </label>
       </div>
 
+      {prog && <ProgressBar value={prog.done} total={prog.total} label={prog.label} />}
       {err && <div className="notice err" style={{ marginTop: 12 }}>{err}</div>}
 
       {res && (

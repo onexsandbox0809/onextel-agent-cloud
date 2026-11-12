@@ -195,3 +195,18 @@ export const fmt = {
   },
   date: (iso: string | null) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—',
 };
+
+export function ProgressBar({ value, total, label }: { value: number; total: number; label?: string }) {
+  const pct = total > 0 ? Math.min(100, Math.round((value / total) * 100)) : 0;
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="row spread tiny dim" style={{ marginBottom: 4 }}>
+        <span>{label ?? 'Pushing to Meta'}</span>
+        <span className="mono">{value}/{total} · {pct}%</span>
+      </div>
+      <div style={{ height: 6, background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 99, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-fill)', transition: 'width .18s ease' }} />
+      </div>
+    </div>
+  );
+}
