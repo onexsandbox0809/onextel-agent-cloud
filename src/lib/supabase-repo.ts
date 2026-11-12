@@ -61,8 +61,73 @@ export async function sbUpdateNumber(n: PhoneNumber) {
   const { error } = await sb.from('phone_numbers').update({
     status: n.status, agent_id: n.agent_id, registered_at: n.registered_at,
     two_step_pin_set: n.two_step_pin_set, meta_agent_id: n.meta_agent_id ?? null,
+    display: n.display, wa_phone_number_id: n.wa_phone_number_id, waba_id: n.waba_id,
   }).eq('id', n.id);
   if (error) throw new Error(error.message);
+}
+
+export async function sbNumber(id: string): Promise<PhoneNumber | null> {
+  const sb = serviceSupabase();
+  const { data } = await sb.from('phone_numbers').select('*').eq('id', id).maybeSingle();
+  return (data as PhoneNumber) || null;
+}
+
+export async function sbConversation(id: string): Promise<Conversation | null> {
+  const sb = serviceSupabase();
+  const { data } = await sb.from('conversations').select('*').eq('id', id).maybeSingle();
+  return (data as Conversation) || null;
+}
+
+export async function sbUpdateConversation(c: Conversation) {
+  const sb = serviceSupabase();
+  const { error } = await sb.from('conversations').update({
+    status: c.status, unread: c.unread, messages: c.messages, updated_at: c.updated_at,
+  }).eq('id', c.id);
+  if (error) throw new Error(error.message);
+}
+
+export async function sbUser(id: string): Promise<User | null> {
+  const sb = serviceSupabase();
+  const { data } = await sb.from('users').select('*').eq('id', id).maybeSingle();
+  return (data as User) || null;
+}
+
+export async function sbUpdateUser(id: string, patch: { role?: string; status?: string }) {
+  const sb = serviceSupabase();
+  const { data, error } = await sb.from('users').update(patch).eq('id', id).select('*').maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as User) || null;
+}
+
+export async function sbInviteUser(u: any) {
+  const sb = serviceSupabase();
+  const { data, error } = await sb.auth.admin.createUser({
+    email: u.email, password: u.password, email_confirm: true, user_metadata: { name: u.name },
+  });
+  if (error && !/already/i.test(error.message)) throw new Error(error.message);
+  const row = { ...u, id: data?.user?.id || u.id };
+  const ins = await sb.from('users').upsert(row, { onConflict: 'id' });
+  if (ins.error) throw new Error(ins.error.message);
+  return row;
+}
+
+export async function sbCredentials(tenantId: string | null) {
+  const sb = serviceSupabase();
+  let q = sb.from('credentials').select('*').order('last_rotated', { ascending: false });
+  if (tenantId) q = q.eq('tenant_id', tenantId);
+  const { data } = await q;
+  return data || [];
+}
+
+export async function sbInsertCredential(c: any) {
+  const sb = serviceSupabase();
+  const { error } = await sb.from('credentials').insert(c);
+  if (error) throw new Error(error.message);
+}
+
+export async function sbDeleteCredential(id: string) {
+  const sb = serviceSupabase();
+  await sb.from('credentials').delete().eq('id', id);
 }
 
 export async function sbConversations(tenantId: string | null): Promise<Conversation[]> {

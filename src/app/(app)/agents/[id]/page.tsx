@@ -26,6 +26,26 @@ export default function AgentPage() {
   const { push } = useToast();
   const agent = data?.agent;
 
+  const [rollBusy, setRollBusy] = useState(false);
+
+  const isLive = !!agent?.settings?.rollout?.enabled;
+  const toggleRollout = async () => {
+    if (!agent) return;
+    setRollBusy(true);
+    try {
+      const enabled = !isLive;
+      const r = await fetch(`/api/agents/${agent.id}/rollout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Rollout change failed');
+      push(enabled ? 'Rollout enabled — PUT agent_config/settings sent.' : 'Rollout disabled — the agent is paused.');
+      reload();
+    } catch (e) {
+      push(e instanceof Error ? e.message : 'Rollout change failed', true);
+    } finally { setRollBusy(false); }
+  };
+
   if (loading || !agent) return <div className="stack"><Skeleton h={90} /><Skeleton h={420} /></div>;
 
   const number = (agent as any).number;
@@ -49,6 +69,9 @@ export default function AgentPage() {
         </div>
         <div className="actions">
           <button className="btn" onClick={() => setTab('test')}><IconSend width={14} height={14} /> Test</button>
+          <button className={`btn ${isLive ? '' : 'btn-primary'}`} onClick={toggleRollout} disabled={rollBusy}>
+            {rollBusy ? 'Saving…' : isLive ? 'Disable agent' : 'Enable agent'}
+          </button>
           <button className="btn btn-primary" onClick={() => setPublish(true)}><IconRocket width={14} height={14} /> Publish</button>
         </div>
       </div>
@@ -65,6 +88,9 @@ export default function AgentPage() {
       </div>
 
       {tab === 'overview' && <Overview agent={agent} preflight={preflight} tenant={data?.tenant?.name || '—'} />}
+      {tab === 'knowledge' && <BulkUpload agentId={agent.id} section="faqs" reload={reload} />}
+      {tab === 'skills' && <BulkUpload agentId={agent.id} section="skills" reload={reload} />}
+      {tab === 'connectors' && <BulkUpload agentId={agent.id} section="connectors" reload={reload} />}
       {tab === 'knowledge' && <Knowledge agent={agent} reload={reload} />}
       {tab === 'skills' && <Skills agent={agent} reload={reload} />}
       {tab === 'connectors' && <Connectors agent={agent} reload={reload} />}
@@ -562,5 +588,84 @@ function PublishModal({ agent, open, onClose, onDone }: { agent: Agent; open: bo
         {err && <div className="notice err">{err}</div>}
       </div>
     </Modal>
+  );
+}
+
+
+function BulkUpload({ agentId, section, reload }: { agentId: string; section: 'faqs' | 'skills' | 'connectors'; reload: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<any>(null);
+  const [err, setErr] = useState('');
+
+  const meta = {
+    faqs: { title: 'Bulk upload FAQs', sub: 'Spreadsheet columns: question, answer, category (optional).', file: 'faqs-import.xlsx', csv: 'faqs-import.csv' },
+    skills: { title: 'Bulk upload skills', sub: 'Spreadsheet columns: title, description, skill (the full markdown instructions).', file: 'skills-import.xlsx', csv: 'skills-import.csv' },
+    connectors: { title: 'Bulk upload connectors', sub: 'Two sheets — Connectors (name, base_url, auth_type) and Tools (connector_name, tool_name, method, path, params).', file: 'connectors-import.xlsx', csv: '' },
+  }[section];
+
+  const upload = async (file: File) => {
+    setBusy(true); setErr(''); setRes(null);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const r = await fetch(`/api/agents/${agentId}/${section}`, { method: 'POST', body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Import failed (${r.status})`);
+      setRes(d);
+      reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Import failed');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div>
+          <div className="small"><b>{meta.title}</b></div>
+          <div className="tiny dim" style={{ marginTop: 2 }}>{meta.sub}</div>
+          <div className="tiny" style={{ marginTop: 6 }}>
+            <a className="link" href={`/templates/${meta.file}`} download>Download Excel template</a>
+            {meta.csv && <> · <a className="link" href={`/templates/${meta.csv}`} download>CSV</a></>}
+            <span className="dim"> · max 300 rows per file</span>
+          </div>
+        </div>
+        <label className={`btn ${busy ? '' : 'btn-primary'}`} style={{ cursor: busy ? 'default' : 'pointer' }}>
+          {busy ? 'Importing…' : 'Upload .xlsx / .csv'}
+          <input type="file" accept=".xlsx,.xls,.csv,text/csv" hidden disabled={busy}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = ''; }} />
+        </label>
+      </div>
+
+      {err && <div className="notice err" style={{ marginTop: 12 }}>{err}</div>}
+
+      {res && (
+        <div className="stack" style={{ gap: 8, marginTop: 12 }}>
+          <div className="notice ok" style={{ margin: 0 }}>
+            <b>{res.imported} imported</b>{res.skipped ? ` · ${res.skipped} duplicates skipped` : ''}
+            {res.errors?.length ? ` · ${res.errors.length} row${res.errors.length === 1 ? '' : 's'} rejected` : ''}
+          </div>
+          {!!res.created?.length && (
+            <div className="tiny dim">Added: {res.created.join(' · ')}{res.imported > res.created.length ? ` +${res.imported - res.created.length} more` : ''}</div>
+          )}
+          {!!res.warnings?.length && (
+            <details>
+              <summary className="tiny" style={{ cursor: 'pointer' }}>{res.warnings.length} warning{res.warnings.length === 1 ? '' : 's'}</summary>
+              <ul className="tiny dim" style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                {res.warnings.slice(0, 12).map((w: string, i: number) => <li key={i}>{w}</li>)}
+              </ul>
+            </details>
+          )}
+          {!!res.errors?.length && (
+            <details open>
+              <summary className="tiny" style={{ cursor: 'pointer' }}>{res.errors.length} row error{res.errors.length === 1 ? '' : 's'}</summary>
+              <ul className="tiny" style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                {res.errors.slice(0, 12).map((e: any, i: number) => <li key={i}><span className="mono">row {e.row}</span> — {e.error}</li>)}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

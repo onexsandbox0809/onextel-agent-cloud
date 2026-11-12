@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth';
 import { canWrite, forbidden, scopeOf } from '@/lib/session-util';
 import { db, newId, recordAudit } from '@/lib/demo-db';
 import { isDemo } from '@/lib/env';
-import { sbUsers } from '@/lib/supabase-repo';
+import { sbInviteUser, sbUpdateUser, sbUser, sbUsers } from '@/lib/supabase-repo';
 
 export async function GET() {
   const session = await getSession();
@@ -27,6 +27,7 @@ export async function POST(req: Request) {
     avatar_hue: Math.floor(Math.random() * 360), password: 'demo1234',
   };
   if (isDemo()) { db().users.push(user); recordAudit(tenant_id || '', session.user.email, 'team.invite', user.email); }
+  else { await sbInviteUser(user); recordAudit(tenant_id || '', session.user.email, 'team.invite', user.email); }
   const { password, ...safe } = user;
   return NextResponse.json({ user: safe }, { status: 201 });
 }
@@ -36,9 +37,13 @@ export async function PATCH(req: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!canWrite(session)) return forbidden();
   const body = await req.json();
-  const user = db().users.find((u) => u.id === body.id);
+  const user = isDemo() ? db().users.find((u) => u.id === body.id) : await sbUser(body.id);
   if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 });
-  Object.assign(user, { role: body.role ?? user.role, status: body.status ?? user.status });
-  const { password, ...safe } = user;
+  if (session.user.role !== 'platform_admin' && user.tenant_id !== session.user.tenant_id) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  if (isDemo()) Object.assign(user, { role: body.role ?? user.role, status: body.status ?? user.status });
+  else await sbUpdateUser(user.id, { role: body.role ?? user.role, status: body.status ?? user.status });
+  const { password, ...safe } = user as any;
   return NextResponse.json({ user: safe });
 }

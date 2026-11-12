@@ -5,6 +5,7 @@ import { db, getAgent, newId, nowIso, recordAudit } from '@/lib/demo-db';
 import { isDemo } from '@/lib/env';
 import { sbAgent, sbUpdateAgent } from '@/lib/supabase-repo';
 import { meta, toToolDefinition } from '@/lib/meta';
+import { importWorkbook, MAX_IMPORT_ROWS } from '@/lib/agent-import';
 import type { Agent } from '@/lib/types';
 
 type Ctx = { params: Promise<{ id: string; section: string }> };
@@ -31,8 +32,33 @@ export async function POST(req: Request, ctx: Ctx) {
   const res = await load(session, id);
   if ('error' in res) return res.error;
   const agent = res.agent as Agent;
-  const body = await req.json().catch(() => ({}));
+  const ctype = req.headers.get('content-type') || '';
+  const isUpload = ctype.includes('multipart/form-data');
+  const body = isUpload ? {} : await req.json().catch(() => ({}));
   const token = process.env.META_SYSTEM_USER_TOKEN;
+
+  // ── Bulk upload: .xlsx / .xls / .csv ──────────────────────────────────
+  if (isUpload) {
+    if (!['faqs', 'skills', 'connectors'].includes(section)) {
+      return NextResponse.json({ error: 'Upload is supported for FAQs, skills and connectors only.' }, { status: 400 });
+    }
+    const form = await req.formData();
+    const file = form.get('file');
+    if (!(file instanceof Blob)) return NextResponse.json({ error: 'Attach an .xlsx, .xls or .csv file.' }, { status: 400 });
+    if (file.size > 8 * 1024 * 1024) return NextResponse.json({ error: 'File is larger than 8 MB.' }, { status: 413 });
+    let buf: Buffer;
+    try { buf = Buffer.from(await file.arrayBuffer()); }
+    catch { return NextResponse.json({ error: 'Could not read the uploaded file.' }, { status: 400 }); }
+    try {
+      const result = await importWorkbook({ agent, section: section as any, buf, token, email: session.user.email });
+      if (!result.imported && result.errors.length) {
+        return NextResponse.json({ ...result, error: result.errors[0].error }, { status: 400 });
+      }
+      return NextResponse.json({ ...result, max_rows: MAX_IMPORT_ROWS, limit: MAX_IMPORT_ROWS });
+    } catch (e) {
+      return NextResponse.json({ error: `Could not parse the spreadsheet: ${e instanceof Error ? e.message : 'unknown error'}` }, { status: 400 });
+    }
+  }
 
   switch (section) {
     case 'faqs': {
@@ -103,6 +129,24 @@ export async function POST(req: Request, ctx: Ctx) {
       await persist(agent, { status: 'paused', settings: { ...agent.settings, rollout: { enabled: false } } } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, 'agent.pause', agent.name, 'warning');
       return NextResponse.json({ agent });
+    }
+    case 'rollout': {
+      const enabled = body.enabled !== false;
+      const remote = token && agent.meta_agent_id
+        ? await meta.putRollout(agent.entity_id, agent.meta_agent_id, enabled, token)
+        : null;
+      if (remote && !remote.ok) {
+        return NextResponse.json({ agent, remote, error: `Meta rejected the rollout change: ${remote.error || 'error'}` }, { status: 502 });
+      }
+      await persist(agent, {
+        status: enabled ? 'live' : 'paused',
+        settings: { ...agent.settings, rollout: { enabled } },
+      } as Partial<Agent>);
+      recordAudit(agent.tenant_id, session.user.email, enabled ? 'agent.enable' : 'agent.disable', agent.name, 'critical');
+      return NextResponse.json({
+        agent, remote, mode: remote ? 'graph' : 'config_only',
+        rollout: { enabled },
+      });
     }
     case 'evaluate': {
       const ids: string[] = body.case_ids || [];

@@ -18,11 +18,25 @@ import { GRAPH_VERSION } from './env';
  *   - POST /{phone-number-id}/agent-eval/run?eval_case_ids=
  *   - GET  /{phone-number-id}/agent-eval/run?job_id=
  *
- * X-API-Version: 2.0.0 is sent on config/connector calls, 1.0.0 on
- * onboarding / business_info / eval / thread_control, matching Meta's samples.
+ * Two hosts: graph.facebook.com/<v25.0>/… for Cloud API + config, and
+ * api.facebook.com/<id>/agent_onboarding (unversioned) for agent onboarding.
+ * X-API-Version: 2.0.0 is sent everywhere (onboarding requires it).
  */
 
-const BASE = 'https://graph.facebook.com';
+/**
+ * Meta Business Agent (WhatsApp) client — TWO hosts, exactly as the Postman
+ * collection defines them ({{API}} = https://api.facebook.com):
+ *
+ *   graph.facebook.com/v25.0/{id}/register          Cloud API number registration (PIN, no X-API-Version)
+ *   api.facebook.com/{id}/agent_onboarding          agent onboarding  (UNVERSIONED, 2.0.0)
+ *   api.facebook.com/{id}/agent_config/...          settings 2.0.0 · business_info 1.0.0 · faq 1.0.0 · skills 2.0.0
+ *   api.facebook.com/{id}/agent_connectors...       connectors + tools 2.0.0
+ *   api.facebook.com/business/whatsapp/...          thread_control 1.0.0
+ *   api.facebook.com/{id}/agent-eval/...            cases 1.0.0 · run 1.0.0 · status 2.0.0
+ */
+const GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com';
+/** Everything other than /register lives here — api.facebook.com, no /vXX.X segment. */
+const API_BASE = process.env.META_API_BASE || process.env.META_ONBOARDING_BASE || 'https://api.facebook.com';
 
 export interface GraphResult<T = any> { ok: boolean; status: number; data?: T; error?: string; skipped?: boolean }
 
@@ -32,22 +46,32 @@ export function metaToken(tenantToken?: string | null) {
 
 export async function graph<T = any>(
   path: string,
-  opts: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown; token?: string | null; apiVersion?: string } = {},
+  opts: {
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    body?: unknown;
+    token?: string | null;
+    apiVersion?: string | null;
+    base?: string;
+    versioned?: boolean;
+  } = {},
 ): Promise<GraphResult<T>> {
   const token = metaToken(opts.token);
   if (!token) {
     return { ok: false, status: 0, skipped: true, error: 'No Meta access token configured for this tenant. Add one under Settings → API credentials.' };
   }
-  const url = `${BASE}/${GRAPH_VERSION}/${path.replace(/^\//, '')}`;
+  const base = opts.base || API_BASE;
+  const clean = path.replace(/^\//, '');
+  const url = opts.versioned ? `${base}/${GRAPH_VERSION}/${clean}` : `${base}/${clean}`;
+  const hasBody = opts.body !== undefined && opts.body !== null;
   try {
     const res = await fetch(url, {
       method: opts.method || 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
-        'X-API-Version': opts.apiVersion || '2.0.0',
+        ...(opts.apiVersion === null ? {} : { 'X-API-Version': opts.apiVersion || '2.0.0' }),
       },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      body: hasBody ? (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)) : undefined,
       cache: 'no-store',
     });
     const text = await res.text();
@@ -63,14 +87,26 @@ export async function graph<T = any>(
 }
 
 export const meta = {
+  // ── graph.facebook.com/v25.0 — Cloud API number registration (no X-API-Version) ──
   registerNumber: (entityId: string, pin: string, token?: string | null) =>
-    graph(`${entityId}/register`, { method: 'POST', body: { messaging_product: 'whatsapp', pin }, token }),
+    graph(`${entityId}/register`, {
+      method: 'POST', body: { messaging_product: 'whatsapp', pin }, token,
+      apiVersion: null, base: GRAPH_BASE, versioned: true,
+    }),
 
+  // ── api.facebook.com — Business Agent surface (unversioned paths) ──
   onboarding: (entityId: string, token?: string | null) =>
-    graph(`${entityId}/agent_onboarding?channel=whatsapp`, { method: 'POST', body: {}, token, apiVersion: '1.0.0' }),
+    graph(`${entityId}/agent_onboarding?channel=whatsapp`, { method: 'POST', body: '', token, apiVersion: '2.0.0' }),
 
   putSettings: (entityId: string, agentId: string, settings: unknown, token?: string | null) =>
-    graph(`${entityId}/agent_config/settings?agent_id=${encodeURIComponent(agentId)}`, { method: 'PUT', body: settings, token }),
+    graph(`${entityId}/agent_config/settings?agent_id=${encodeURIComponent(agentId)}`, {
+      method: 'PUT', body: settings, token, apiVersion: '2.0.0',
+    }),
+
+  putRollout: (entityId: string, agentId: string, enabled: boolean, token?: string | null) =>
+    graph(`${entityId}/agent_config/settings?agent_id=${encodeURIComponent(agentId)}`, {
+      method: 'PUT', body: { rollout: { enabled } }, token, apiVersion: '1.0.0',
+    }),
 
   putBusinessInfo: (entityId: string, info: unknown, token?: string | null) =>
     graph(`${entityId}/agent_config/business_info`, { method: 'PUT', body: info, token, apiVersion: '1.0.0' }),
@@ -79,25 +115,29 @@ export const meta = {
     graph(`${entityId}/agent_config/faq`, { method: 'POST', body: faq, token, apiVersion: '1.0.0' }),
 
   createSkill: (entityId: string, agentId: string, skill: unknown, token?: string | null) =>
-    graph(`${entityId}/agent_config/skills?agent_id=${encodeURIComponent(agentId)}`, { method: 'POST', body: skill, token }),
+    graph(`${entityId}/agent_config/skills?agent_id=${encodeURIComponent(agentId)}`, {
+      method: 'POST', body: skill, token, apiVersion: '2.0.0',
+    }),
 
   createConnector: (entityId: string, connector: unknown, token?: string | null) =>
-    graph(`${entityId}/agent_connectors`, { method: 'POST', body: connector, token }),
-
-  createTool: (entityId: string, connectorId: string, tool: unknown, token?: string | null) =>
-    graph(`${entityId}/agent_connectors/${connectorId}/tools`, { method: 'POST', body: tool, token }),
-
-  listTools: (entityId: string, connectorId: string, token?: string | null) =>
-    graph(`${entityId}/agent_connectors/${connectorId}/tools`, { token }),
-
-  deleteTool: (entityId: string, connectorId: string, toolId: string, token?: string | null) =>
-    graph(`${entityId}/agent_connectors/${connectorId}/tools/${toolId}`, { method: 'DELETE', token }),
-
-  runTool: (entityId: string, connectorId: string, toolId: string, input: string, token?: string | null) =>
-    graph(`${entityId}/agent_connectors/${connectorId}/tools/${toolId}/run`, { method: 'POST', body: { input }, token }),
+    graph(`${entityId}/agent_connectors`, { method: 'POST', body: connector, token, apiVersion: '2.0.0' }),
 
   listConnectors: (entityId: string, token?: string | null) =>
-    graph(`${entityId}/agent_connectors`, { token }),
+    graph(`${entityId}/agent_connectors`, { token, apiVersion: '2.0.0' }),
+
+  createTool: (entityId: string, connectorId: string, tool: unknown, token?: string | null) =>
+    graph(`${entityId}/agent_connectors/${connectorId}/tools`, { method: 'POST', body: tool, token, apiVersion: '2.0.0' }),
+
+  listTools: (entityId: string, connectorId: string, token?: string | null) =>
+    graph(`${entityId}/agent_connectors/${connectorId}/tools`, { token, apiVersion: '2.0.0' }),
+
+  deleteTool: (entityId: string, connectorId: string, toolId: string, token?: string | null) =>
+    graph(`${entityId}/agent_connectors/${connectorId}/tools/${toolId}`, { method: 'DELETE', token, apiVersion: '2.0.0' }),
+
+  runTool: (entityId: string, connectorId: string, toolId: string, input: string, token?: string | null) =>
+    graph(`${entityId}/agent_connectors/${connectorId}/tools/${toolId}/run`, {
+      method: 'POST', body: { input }, token, apiVersion: '2.0.0',
+    }),
 
   threadControl: (entityId: string, action: 'takeover' | 'release', to: string, token?: string | null) =>
     graph(`business/whatsapp/phone_numbers/${entityId}/thread_control`, {
@@ -108,11 +148,33 @@ export const meta = {
     graph(`${entityId}/agent-eval/cases`, { token, apiVersion: '1.0.0' }),
 
   runEval: (entityId: string, caseIds: string[], token?: string | null) =>
-    graph(`${entityId}/agent-eval/run?eval_case_ids=${caseIds.join(',')}`, { method: 'POST', body: {}, token, apiVersion: '1.0.0' }),
+    graph(`${entityId}/agent-eval/run?eval_case_ids=${caseIds.join(',')}`, {
+      method: 'POST', body: {}, token, apiVersion: '1.0.0',
+    }),
 
   evalStatus: (entityId: string, jobId: string, token?: string | null) =>
-    graph(`${entityId}/agent-eval/run?job_id=${jobId}`, { token }),
+    graph(`${entityId}/agent-eval/run?job_id=${jobId}`, { token, apiVersion: '2.0.0' }),
 };
+
+/** Every Graph call this app can make — host, path, API version. Used by the Settings audit table. */
+export const META_ENDPOINTS = [
+  { op: 'Number registration', method: 'POST', host: 'graph.facebook.com/v25.0', path: '{id}/register', version: '—', note: 'PIN required' },
+  { op: 'Agent onboarding', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_onboarding?channel=whatsapp', version: '2.0.0', note: 'returns agent_id' },
+  { op: 'Agent settings', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/settings?agent_id=', version: '2.0.0', note: 'rollout/handoff' },
+  { op: 'Rollout toggle', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/settings?agent_id=', version: '1.0.0', note: 'publish / pause' },
+  { op: 'Business info', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/business_info', version: '1.0.0', note: '' },
+  { op: 'Create FAQ', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/faq', version: '1.0.0', note: 'one Q&A per call' },
+  { op: 'Create skill', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/skills?agent_id=', version: '2.0.0', note: '' },
+  { op: 'Create connector', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },
+  { op: 'List connectors', method: 'GET', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },
+  { op: 'Create tool', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors/{cid}/tools', version: '2.0.0', note: '' },
+  { op: 'Delete tool', method: 'DELETE', host: 'api.facebook.com', path: '{id}/agent_connectors/{cid}/tools/{tid}', version: '2.0.0', note: '' },
+  { op: 'Run tool', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors/{cid}/tools/{tid}/run', version: '2.0.0', note: 'body {input:"<json string>"}' },
+  { op: 'Thread control', method: 'POST', host: 'api.facebook.com', path: 'business/whatsapp/phone_numbers/{id}/thread_control', version: '1.0.0', note: 'takeover / release' },
+  { op: 'Eval cases', method: 'GET', host: 'api.facebook.com', path: '{id}/agent-eval/cases', version: '1.0.0', note: '' },
+  { op: 'Run eval', method: 'POST', host: 'api.facebook.com', path: '{id}/agent-eval/run?eval_case_ids=', version: '1.0.0', note: '' },
+  { op: 'Eval status', method: 'GET', host: 'api.facebook.com', path: '{id}/agent-eval/run?job_id=', version: '2.0.0', note: '' },
+] as const;
 
 /** Convert UI tool shape → Meta connector tool definition. */
 export function toToolDefinition(t: {

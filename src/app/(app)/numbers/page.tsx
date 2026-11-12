@@ -52,6 +52,19 @@ export default function NumbersPage() {
 
   const [needsPin, setNeedsPin] = useState<string | null>(null);
 
+  const saveIds = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    try {
+      await api(`/api/numbers/${fd.get('id')}`, 'PATCH', { action: 'update', wa_phone_number_id: fd.get('pn'), waba_id: fd.get('waba') });
+      push('Number IDs saved.');
+      reload();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : 'Could not save the IDs';
+      setFormErr(m); push(m, true);
+    }
+  };
+
   const register = async (n: PhoneNumber, withPin?: string) => {
     setFormErr('');
     setRegBusy(n.id);
@@ -65,7 +78,7 @@ export default function NumbersPage() {
     } catch (e) {
       // the API returns structured diagnostics on 502 — surface them inline
       const msg = e instanceof Error ? e.message : 'Onboarding failed';
-      setResult({ id: n.id, agentId: null, mode: 'graph', steps: [], error: msg });
+      setResult({ id: n.id, agentId: null, mode: 'none', steps: [], error: msg });
       // 428-style: Meta wants the number registered first → reveal the optional PIN
       if (/not registered yet|6-digit two-step PIN/i.test(msg)) { setNeedsPin(n.id); setPinFor(n.id); }
       push(msg, true);
@@ -155,7 +168,7 @@ export default function NumbersPage() {
           <div className="card-head">
             <div style={{ flex: 1 }}>
               <div className="card-title">{result.error ? 'Registration failed' : 'Registration complete'}</div>
-              <div className="card-sub">Mode: {result.mode}</div>
+              <div className="card-sub">{result.steps.length ? `Mode: ${result.mode}` : 'No Meta call made'}</div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => setResult(null)}><IconX width={13} height={13} /></button>
           </div>
@@ -240,7 +253,7 @@ export default function NumbersPage() {
                     </div>
                     <div className="row" style={{ gap: 6 }}>
                       <button className="btn btn-sm" onClick={() => { setPinFor(open ? null : n.id); setPin(''); setFormErr(''); }}>
-                        {open ? 'Cancel' : n.status === 'active' ? 'Re-onboard' : 'Register agent'}
+                        {open ? 'Cancel' : n.status === 'active' ? 'Re-run' : 'Register agent'}
                       </button>
                     </div>
                   </div>
@@ -248,36 +261,55 @@ export default function NumbersPage() {
                   {open && (
                     <div style={{ padding: '0 18px 16px', background: 'var(--panel-2)' }}>
                       <div className="stack" style={{ gap: 10, paddingTop: 12 }}>
+                        {!/^\d{10,20}$/.test(n.wa_phone_number_id) && (
+                          <div className="notice err" style={{ margin: 0 }}>
+                            Stored phone number ID <span className="mono">{n.wa_phone_number_id}</span> is not a numeric Meta ID.
+                            Meta will answer “number not found” — fix it before registering.
+                          </div>
+                        )}
                         <div className="notice info" style={{ margin: 0 }}>
-                          Calls <span className="mono">POST /{n.wa_phone_number_id}/agent_onboarding?channel=whatsapp</span>.
-                          No PIN needed — Meta returns the agent ID, which is shown here and saved to the number.
+                          Two calls, in order: <span className="mono">POST graph.facebook.com/v25.0/{n.wa_phone_number_id}/register</span>{' '}
+                          with the two-step PIN, then <span className="mono">POST api.facebook.com/{n.wa_phone_number_id}/agent_onboarding?channel=whatsapp</span>.{' '}
+                          Meta returns the agent ID on the second call.
                         </div>
                         <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                          <button className="btn btn-primary" disabled={regBusy === n.id} onClick={() => register(n)}>
-                            {regBusy === n.id ? 'Onboarding…' : n.status === 'active' ? 'Re-run onboarding' : 'Register agent with Meta'}
+                          <div style={{ width: 200 }}>
+                            <Field label="6-digit two-step PIN">
+                              <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
+                                value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+                            </Field>
+                          </div>
+                          <button className="btn btn-primary" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
+                            {regBusy === n.id ? 'Registering…' : n.status === 'active' ? 'Re-run registration' : 'Register number & onboard agent'}
                           </button>
                           {n.meta_agent_id && <span className="mono tiny dim">agent {n.meta_agent_id}</span>}
                         </div>
-
-                        {needsPin === n.id && (
-                          <div className="stack" style={{ gap: 8, paddingTop: 4 }}>
-                            <div className="notice" style={{ margin: 0 }}>
-                              Meta reports this number is not registered on the Cloud API yet. Its <b>6-digit two-step PIN</b> is
-                              the one set on the number in WhatsApp Manager — only needed once, to register the number itself.
-                            </div>
-                            <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                              <div style={{ width: 190 }}>
-                                <Field label="6-digit two-step PIN (optional)">
-                                  <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
-                                    value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+                        <div className="tiny dim">
+                          The PIN is your business’s two-step verification code for this number in WhatsApp Manager — Meta requires it
+                          on <span className="mono">/register</span> before the number can be onboarded. Test numbers often use <span className="mono">123456</span>.
+                          “Already registered” is treated as success and onboarding continues.
+                        </div>
+                        <details>
+                          <summary className="tiny mono dim" style={{ cursor: 'pointer', padding: '2px 0' }}>Fix IDs (phone number ID / WABA ID)</summary>
+                          <form onSubmit={saveIds} className="stack" style={{ gap: 8, paddingTop: 8 }}>
+                            <input type="hidden" name="id" value={n.id} />
+                            <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                              <div style={{ width: 230 }}>
+                                <Field label="Meta phone number ID">
+                                  <input name="pn" className="input mono" inputMode="numeric" placeholder="1312665798592137"
+                                    defaultValue={/^\d{10,20}$/.test(n.wa_phone_number_id) ? n.wa_phone_number_id : ''} />
                                 </Field>
                               </div>
-                              <button className="btn" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
-                                Register number, then onboard
-                              </button>
+                              <div style={{ width: 230 }}>
+                                <Field label="WABA ID">
+                                  <input name="waba" className="input mono" inputMode="numeric" placeholder="1790923784894660" defaultValue={n.waba_id} />
+                                </Field>
+                              </div>
+                              <button className="btn btn-sm" type="submit">Save IDs</button>
                             </div>
-                          </div>
-                        )}
+                            <div className="tiny dim">WhatsApp Manager → Phone numbers → the numeric <b>Phone number ID</b> (not the phone number).</div>
+                          </form>
+                        </details>
                         {formErr && <div className="notice err" style={{ margin: 0 }}>{formErr}</div>}
                       </div>
                     </div>
@@ -292,11 +324,11 @@ export default function NumbersPage() {
       <div className="grid g3" style={{ marginTop: 12 }}>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconShield width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Two-step verification</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}>Two-step PIN belongs to the WhatsApp Cloud API number, not the agent. It's optional here and only requested when Meta asks.</div>
+          <div className="small muted" style={{ marginTop: 6 }}>The 6-digit PIN is the number's two-step verification code in WhatsApp Manager. Meta needs it to register the number before onboarding.</div>
         </Card>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconBolt width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Registration flow</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}><span className="mono tiny">POST /agent_onboarding</span> is the agent registration — no PIN. The PIN only appears if Meta says the number itself is unregistered.</div>
+          <div className="small muted" style={{ marginTop: 6 }}><span className="mono tiny">POST /register</span> (graph.facebook.com, with PIN) then <span className="mono tiny">POST /agent_onboarding</span> (api.facebook.com, no body).</div>
         </Card>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconRefresh width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>One agent per number</span></div>

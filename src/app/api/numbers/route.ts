@@ -30,10 +30,17 @@ export async function POST(req: Request) {
     }, { status: 400 });
   }
 
+  const pnId = String(body.wa_phone_number_id || '').replace(/\D/g, '');
+  if (process.env.META_SYSTEM_USER_TOKEN && !isDemo() && !/^\d{10,20}$/.test(pnId)) {
+    return NextResponse.json({
+      error: 'Enter the numeric Meta phone number ID (10-20 digits, e.g. 1312665798592137) — the phone number itself will not work.',
+    }, { status: 400 });
+  }
+
   const number = {
     id: newId('pn'), tenant_id, agent_id: null, display: body.display,
-    wa_phone_number_id: body.wa_phone_number_id || String(Math.floor(1e14 + Math.random() * 8e14)),
-    waba_id: body.waba_id || String(Math.floor(1e14 + Math.random() * 8e14)),
+    wa_phone_number_id: String(body.wa_phone_number_id || '').replace(/\D/g, '') || String(Math.floor(1e14 + Math.random() * 8e14)),
+    waba_id: String(body.waba_id || '').replace(/\D/g, '') || String(Math.floor(1e14 + Math.random() * 8e14)),
     provider: 'onextel' as const, provider_ref: `ONX-WA-${Math.floor(10000 + Math.random() * 89999)}`,
     status: 'pending_registration' as const, quality: 'green' as const, messaging_limit: '1K / 24h',
     country: body.country || 'IN', category: body.category || 'OTHER', registered_at: null, two_step_pin_set: false,
