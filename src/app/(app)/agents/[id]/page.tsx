@@ -212,7 +212,7 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
     try {
       const r = await api<any>(`/api/agents/${agent.id}/faqs`, 'GET');
       setMetaState({ total: r.meta?.total ?? 0, matched: r.meta?.matched ?? 0 });
-      push(`Meta has ${r.meta?.total ?? 0} FAQs for this number · ${r.meta?.matched ?? 0} match your local list.`);
+      push(`Meta has ${r.meta?.total ?? 0} FAQs · ${r.meta?.matched ?? 0} already here · ${r.meta?.adopted ?? 0} imported into the grid.`);
       reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Could not read FAQ state from Meta', true); }
     finally { setChecking(false); }
@@ -253,7 +253,7 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
           {agent.faqs.length} entries{list.length !== agent.faqs.length ? ` · ${list.length} shown` : ''}
           {agent.faqs.length > 0 && <> · <b>{agent.faqs.filter((f) => f.synced).length} live on Meta</b></>}
         </span>
-        <button className="btn btn-sm" disabled={checking} onClick={checkMeta}>{checking ? 'Checking…' : 'Check on Meta'}</button>
+        <button className="btn btn-sm" disabled={checking} onClick={checkMeta}>{checking ? 'Fetching…' : 'Fetch from Meta'}</button>
         <button className="btn btn-sm" disabled={syncing} onClick={syncAll} style={{ marginLeft: 'auto' }}>
           {syncing ? 'Pushing…' : 'Push all to Meta'}
         </button>

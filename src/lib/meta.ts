@@ -90,7 +90,13 @@ export async function graph<T = any>(
     const text = await res.text();
     let data: any = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-    const error = res.ok ? undefined : (data?.error?.message || `Graph API error ${res.status}`);
+    const err = data?.error;
+    const parts = err
+      ? [err.message, err.type && `type: ${err.type}`, err.code !== undefined && `code: ${err.code}`, err.error_subcode && `subcode: ${err.error_subcode}`, err.fbtrace_id && `trace: ${err.fbtrace_id}`]
+      : [data?.title, data?.detail, data?.status && `status: ${data.status}`];
+    const error = res.ok
+      ? undefined
+      : (parts.filter(Boolean).join(' · ') || (typeof data === 'string' && data.slice(0, 300)) || `Graph API error ${res.status}`);
     logMetaCall({
       method: opts.method || 'GET', url, apiVersion: opts.apiVersion ?? null,
       reqHeaders, payload: opts.body, status: res.status, ok: res.ok, ms: Date.now() - started,

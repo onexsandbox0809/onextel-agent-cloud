@@ -73,16 +73,29 @@ export async function resolveEntity(agent: Agent): Promise<{ entityId: string; b
  * The number is where /agent_onboarding writes it, so fall back to it - otherwise
  * publish/rollout refuse to run even though the ID exists.
  */
-export async function resolveAgentId(agent: Agent): Promise<{ agentId: string | null; source: 'agent' | 'number' | null; bound: PhoneNumber | null }> {
+export async function resolveAgentId(agent: Agent): Promise<{ agentId: string | null; source: 'agent' | 'number' | null; bound: PhoneNumber | null; conflict?: string }> {
   const { bound } = await resolveEntity(agent);
-  if (agent.meta_agent_id) return { agentId: agent.meta_agent_id, source: 'agent', bound };
-  if (bound?.meta_agent_id) {
-    // adopt it onto the agent so both rows agree
-    agent.meta_agent_id = bound.meta_agent_id;
-    if (isDemo()) Object.assign(agent, { meta_agent_id: bound.meta_agent_id });
-    else await sbUpdateAgent(agent.id, { meta_agent_id: bound.meta_agent_id } as Partial<Agent>).catch(() => null);
-    return { agentId: bound.meta_agent_id, source: 'number', bound };
+  const onNumber = bound?.meta_agent_id ?? null;
+  const onAgent = agent.meta_agent_id ?? null;
+
+  // The number row is the source of truth: /agent_onboarding writes the agent id
+  // there, so it is the value Meta actually issued for this phone number.
+  if (onNumber) {
+    if (onAgent && onAgent !== onNumber) {
+      // Adopt the number's id and report the divergence instead of silently using a stale one.
+      agent.meta_agent_id = onNumber;
+      if (isDemo()) Object.assign(agent, { meta_agent_id: onNumber });
+      else await sbUpdateAgent(agent.id, { meta_agent_id: onNumber } as Partial<Agent>).catch(() => null);
+      return { agentId: onNumber, source: 'number', bound, conflict: `agent row had ${onAgent}, number row had ${onNumber} — using the number row` };
+    }
+    if (!onAgent) {
+      agent.meta_agent_id = onNumber;
+      if (isDemo()) Object.assign(agent, { meta_agent_id: onNumber });
+      else await sbUpdateAgent(agent.id, { meta_agent_id: onNumber } as Partial<Agent>).catch(() => null);
+    }
+    return { agentId: onNumber, source: 'number', bound };
   }
+  if (onAgent) return { agentId: onAgent, source: 'agent', bound };
   return { agentId: null, source: null, bound };
 }
 

@@ -392,20 +392,44 @@ export async function GET(req: Request, ctx: Ctx) {
   if (!remote.ok) return NextResponse.json({ error: remote.error || `Meta returned ${remote.status}`, status: remote.status }, { status: 502 });
 
   const raw = remote.data as any;
-  const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
-  const byQuestion = new Map(list.map((f) => [String(f.question || '').trim().toLowerCase(), f]));
+  const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data
+    : Array.isArray(raw?.faqs) ? raw.faqs : [];
+  const norm = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 
+  const byQuestion = new Map(list.map((f) => [norm(f.question), f]));
+  const byId = new Map(list.map((f) => [String(f.id), f]));
+
+  // 1) mark what we already hold
   let matched = 0;
   agent.faqs = agent.faqs.map((f) => {
-    const hit = byQuestion.get(f.question.trim().toLowerCase());
+    const hit = (f as any).meta_id ? byId.get(String((f as any).meta_id)) : byQuestion.get(norm(f.question));
     if (hit) { matched++; return { ...f, meta_id: hit.id, synced: true }; }
-    return { ...f, meta_id: null, synced: false };
+    return { ...f, synced: false, meta_id: null };
   });
-  await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+
+  // 2) pull in anything Meta has that we do not — this is what makes the grid show 22
+  const localQuestions = new Set(agent.faqs.map((f) => norm(f.question)));
+  const adopted: any[] = [];
+  for (const f of list) {
+    if (!f?.question || localQuestions.has(norm(f.question))) continue;
+    localQuestions.add(norm(f.question));
+    adopted.push({
+      id: newId('faq'), question: String(f.question), answer: String(f.answer ?? ''),
+      category: 'Imported from Meta', updated_at: nowIso(),
+      meta_id: f.id ?? null, synced: true,
+    });
+  }
+  if (adopted.length) {
+    agent.faqs = [...agent.faqs, ...adopted];
+    await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+    recordAudit(agent.tenant_id, session.user.email, 'faq.import_from_meta', `${adopted.length} entries`);
+  } else {
+    await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+  }
 
   return NextResponse.json({
     agent, mode: 'graph', http: remote.status,
-    meta: { total: list.length, matched, local: agent.faqs.length },
+    meta: { total: list.length, matched, adopted: adopted.length, local: agent.faqs.length },
     faqs: list,
   });
 }

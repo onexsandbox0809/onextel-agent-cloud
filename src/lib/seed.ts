@@ -25,7 +25,7 @@ export const users: (User & { password: string })[] = [
   { id: 'u_nt', tenant_id: 't_nt', name: 'Layla Hassan', email: 'layla@contoso.example', role: 'tenant_admin', status: 'active', last_active: iso(2), avatar_hue: 160, password: 'demo1234' },
 ];
 
-const faqCategories = ['Booking', 'Booking', 'Booking', 'Manage', 'Manage', 'Manage', 'Booking', 'Cancellation', 'Offers', 'Pricing', 'Loyalty', 'Loyalty', 'Loyalty', 'Check-in', 'Check-in', 'Check-in', 'Travel', 'Baggage', 'Manage', 'Support'];
+const faqCategories = ['Orders', 'Orders', 'Orders', 'Orders', 'Orders', 'Orders', 'Payments', 'Returns', 'Offers', 'Pricing', 'Loyalty', 'Loyalty', 'Loyalty', 'Delivery', 'Delivery', 'Delivery', 'Support', 'Orders', 'Account', 'Support'];
 
 export function makeAirIndiaAgent(): Agent {
   const connectorDef: any = raw.connector;
@@ -40,13 +40,13 @@ export function makeAirIndiaAgent(): Agent {
       name: t.name,
       description: t.description,
       method: rd.method || 'GET',
-      path: (rd.path || '/').replace('{flight_id}', '{flight_id}').replace('{pnr}', '{pnr}'),
+      path: (rd.path || '/').replace('{order_id}', '{order_id}'),
       path_params: pp, query_params: qp, body_params: bp,
       user_auth_required: !!t.user_auth_required,
       enabled: true,
       last_run_at: iso(i % 4, i),
       last_status: i === 8 ? 'error' : 'ok',
-      test_input: i === 0 ? '{}' : i === 3 ? '{"pnr":"AIXQ7T2M","lastName":"Bhargava"}' : '{"origin":"DEL","destination":"CCM","departureDate":"2026-12-14"}',
+      test_input: i === 0 ? '{}' : i === 3 ? '{"order_id":"ORD-100234"}' : '{"customer_id":"cus_8841"}',
     };
   });
 
@@ -104,8 +104,8 @@ export const agents: Agent[] = [
 ];
 
 export const numbers: PhoneNumber[] = [
-  { id: 'pn_aix_1', tenant_id: 't_aix', agent_id: 'a_aix', display: '+91 63600 12345', wa_phone_number_id: '109876543210987', waba_id: '778899001122334', provider: 'onextel', provider_ref: 'ONX-WA-88121', status: 'active', quality: 'green', messaging_limit: '100K / 24h', country: 'IN', category: 'AIRLINE', registered_at: iso(178), two_step_pin_set: true },
-  { id: 'pn_aix_2', tenant_id: 't_aix', agent_id: 'a_aix_hi', display: '+91 63600 12346', wa_phone_number_id: '109876543210988', waba_id: '778899001122334', provider: 'onextel', provider_ref: 'ONX-WA-88122', status: 'active', quality: 'yellow', messaging_limit: '10K / 24h', country: 'IN', category: 'AIRLINE', registered_at: iso(40), two_step_pin_set: true },
+  { id: 'pn_aix_1', tenant_id: 't_aix', agent_id: 'a_aix', display: '+91 63600 12345', wa_phone_number_id: '109876543210987', waba_id: '778899001122334', provider: 'onextel', provider_ref: 'ONX-WA-88121', status: 'active', quality: 'green', messaging_limit: '100K / 24h', country: 'IN', category: 'RETAIL', registered_at: iso(178), two_step_pin_set: true },
+  { id: 'pn_aix_2', tenant_id: 't_aix', agent_id: 'a_aix_hi', display: '+91 63600 12346', wa_phone_number_id: '109876543210988', waba_id: '778899001122334', provider: 'onextel', provider_ref: 'ONX-WA-88122', status: 'active', quality: 'yellow', messaging_limit: '10K / 24h', country: 'IN', category: 'RETAIL', registered_at: iso(40), two_step_pin_set: true },
   { id: 'pn_bm_1', tenant_id: 't_bm', agent_id: 'a_bm', display: '+91 80471 00220', wa_phone_number_id: '209384756102938', waba_id: '889900112233445', provider: 'onextel', provider_ref: 'ONX-WA-90233', status: 'active', quality: 'green', messaging_limit: '100K / 24h', country: 'IN', category: 'RETAIL', registered_at: iso(138), two_step_pin_set: true },
   { id: 'pn_nt_1', tenant_id: 't_nt', agent_id: 'a_nt', display: '+971 4 555 0192', wa_phone_number_id: '309182736450192', waba_id: '990011223344556', provider: 'onextel', provider_ref: 'ONX-WA-91555', status: 'pending_registration', quality: 'green', messaging_limit: '1K / 24h', country: 'AE', category: 'TRAVEL', registered_at: null, two_step_pin_set: false },
 ];
