@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { syncEntityId } from '@/lib/entity';
+import { resolveEntity, syncEntityId } from '@/lib/entity';
 import { getSession } from '@/lib/auth';
 import { canWrite, forbidden } from '@/lib/session-util';
 import { getAgent, recordAudit } from '@/lib/demo-db';
@@ -16,7 +16,16 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
   if (session.user.role !== 'platform_admin' && agent.tenant_id !== session.user.tenant_id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  return NextResponse.json({ agent, tenant: session.tenants.find((t) => t.id === agent.tenant_id) || null });
+  const resolved = await resolveEntity(agent);
+  if (resolved.bound) await syncEntityId(agent);
+  const payload = {
+    ...agent,
+    entity_id: resolved.bound ? resolved.entityId : '',
+    bound_number: resolved.bound
+      ? { id: resolved.bound.id, display: resolved.bound.display, wa_phone_number_id: resolved.bound.wa_phone_number_id, status: resolved.bound.status }
+      : null,
+  };
+  return NextResponse.json({ agent: payload, tenant: session.tenants.find((t) => t.id === agent.tenant_id) || null });
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {

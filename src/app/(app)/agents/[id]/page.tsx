@@ -143,7 +143,7 @@ function Overview({ agent, preflight, tenant }: { agent: Agent; preflight: any[]
           <div style={{ padding: '4px 0' }}>
             {[
               ['Tenant', tenant],
-              ['Entity / phone number ID', agent.entity_id],
+              ['Phone number ID (Meta)', agent.entity_id || 'no number bound'],
               ['Agent ID (Meta)', agent.meta_agent_id || 'not onboarded'],
               ['Channel', 'whatsapp'],
               ['API version', 'v25.0'],
@@ -187,8 +187,14 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
   const [edit, setEdit] = useState<Faq | null>(null);
   const [q, setQ] = useState('');
   const [form, setForm] = useState({ question: '', answer: '', category: 'General' });
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
   const { push } = useToast();
   const list = agent.faqs.filter((f) => (f.question + f.answer).toLowerCase().includes(q.toLowerCase()));
+  const allSel = list.length > 0 && list.every((f) => sel.has(f.id));
+
+  const toggle = (id: string) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSel(allSel ? new Set() : new Set(list.map((f) => f.id)));
 
   const save = async () => {
     try {
@@ -198,21 +204,49 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
       setOpen(false); setEdit(null); setForm({ question: '', answer: '', category: 'General' }); reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Failed', true); }
   };
-  const del = async (f: Faq) => {
-    await api(`/api/agents/${agent.id}/faqs`, 'DELETE', { id: f.id });
-    push('FAQ removed.'); reload();
+
+  const delMany = async (ids: string[]) => {
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} FAQ${ids.length === 1 ? '' : 's'}?\n\nThey are removed from this agent. Meta has no delete endpoint for FAQs, so any copy already pushed stays live there until the agent is re-published.`)) return;
+    setBusy(true);
+    try {
+      const r = await api<{ deleted: number }>(`/api/agents/${agent.id}/faqs`, 'DELETE', { ids });
+      push(`${r.deleted ?? ids.length} FAQ${ids.length === 1 ? '' : 's'} deleted.`);
+      setSel(new Set()); reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Delete failed', true); }
+    finally { setBusy(false); }
   };
 
   return (
     <>
-      <div className="row" style={{ marginBottom: 10, gap: 8 }}>
-        <input className="input" style={{ maxWidth: 320 }} placeholder="Search knowledge…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <span className="small dim">{agent.faqs.length} entries · synced from business info, FAQs and files</span>
+      <div className="row" style={{ marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+        <input className="input" style={{ maxWidth: 300 }} placeholder="Search knowledge…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="small dim">{agent.faqs.length} entries{list.length !== agent.faqs.length ? ` · ${list.length} shown` : ''}</span>
         <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => { setEdit(null); setForm({ question: '', answer: '', category: 'General' }); setOpen(true); }}><IconPlus width={13} height={13} /> Add FAQ</button>
       </div>
+
+      {list.length > 0 && (
+        <div className="row" style={{ marginBottom: 8, gap: 10, flexWrap: 'wrap' }}>
+          <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={allSel} onChange={toggleAll} />
+            <span className="small">Select all{list.length !== agent.faqs.length ? ' shown' : ''}</span>
+          </label>
+          {sel.size > 0 && (
+            <>
+              <span className="badge info">{sel.size} selected</span>
+              <button className="btn btn-sm" style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }} disabled={busy} onClick={() => delMany([...sel])}>
+                <IconTrash width={12} height={12} /> {busy ? 'Deleting…' : `Delete ${sel.size}`}
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Clear</button>
+            </>
+          )}
+        </div>
+      )}
+
       <Card>
         {list.length === 0 ? <Empty icon={<IconBook width={16} height={16} />} title="No knowledge entries" sub="Add FAQs so the agent can answer from your content." /> : list.map((f) => (
-          <div key={f.id} className="list-row" style={{ alignItems: 'flex-start' }}>
+          <div key={f.id} className="list-row" style={{ alignItems: 'flex-start', background: sel.has(f.id) ? 'var(--accent-tint)' : undefined }}>
+            <input type="checkbox" checked={sel.has(f.id)} onChange={() => toggle(f.id)} style={{ marginTop: 3, marginRight: 10, flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="row" style={{ gap: 8 }}>
                 <span style={{ fontWeight: 550, fontSize: 12.5 }}>{f.question}</span>
@@ -222,7 +256,7 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
             </div>
             <div className="row" style={{ gap: 4 }}>
               <button className="btn btn-ghost btn-sm" onClick={() => { setEdit(f); setForm({ question: f.question, answer: f.answer, category: f.category }); setOpen(true); }}>Edit</button>
-              <button className="btn btn-ghost btn-sm" onClick={() => del(f)}><IconTrash width={12} height={12} /></button>
+              <button className="btn btn-ghost btn-sm" onClick={() => delMany([f.id])}><IconTrash width={12} height={12} /></button>
             </div>
           </div>
         ))}
@@ -246,7 +280,13 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Skill | null>(null);
   const [form, setForm] = useState({ title: '', description: '', skill: '' });
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
   const { push } = useToast();
+  const allSel = agent.skills.length > 0 && agent.skills.every((s) => sel.has(s.id));
+  const toggle = (id: string) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSel(allSel ? new Set() : new Set(agent.skills.map((s) => s.id)));
+
   const save = async () => {
     try {
       if (edit) await api(`/api/agents/${agent.id}/skills`, 'PUT', { ...form, id: edit.id, enabled: edit.enabled });
@@ -254,23 +294,55 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
       push('Skill saved.'); setOpen(false); setEdit(null); reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Failed', true); }
   };
+
+  const delMany = async (ids: string[]) => {
+    if (!ids.length) return;
+    if (!window.confirm(`Delete ${ids.length} skill${ids.length === 1 ? '' : 's'}?\n\nThey are removed from this agent. Meta has no delete endpoint for skills, so any copy already pushed stays live there until the agent is re-published.`)) return;
+    setBusy(true);
+    try {
+      const r = await api<{ deleted: number }>(`/api/agents/${agent.id}/skills`, 'DELETE', { ids });
+      push(`${r.deleted ?? ids.length} skill${ids.length === 1 ? '' : 's'} deleted.`);
+      setSel(new Set()); reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Delete failed', true); }
+    finally { setBusy(false); }
+  };
+
   return (
     <>
       <div className="notice info" style={{ marginBottom: 10 }}>
         Skills are instruction documents (Markdown) sent to <span className="mono">POST /agent_config/skills?agent_id=</span>. Keep them declarative — routing, tone, guardrails and flows.
       </div>
-      <div className="row" style={{ marginBottom: 10 }}>
+      <div className="row" style={{ marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
         <span className="small dim">{agent.skills.length} skills · {agent.skills.filter((s) => s.enabled).length} enabled</span>
+        {agent.skills.length > 0 && (
+          <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={allSel} onChange={toggleAll} />
+            <span className="small">Select all</span>
+          </label>
+        )}
+        {sel.size > 0 && (
+          <>
+            <span className="badge info">{sel.size} selected</span>
+            <button className="btn btn-sm" style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }} disabled={busy} onClick={() => delMany([...sel])}>
+              <IconTrash width={12} height={12} /> {busy ? 'Deleting…' : `Delete ${sel.size}`}
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Clear</button>
+          </>
+        )}
         <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => { setEdit(null); setForm({ title: '', description: '', skill: '' }); setOpen(true); }}><IconPlus width={13} height={13} /> New skill</button>
       </div>
       <div className="grid g2">
         {agent.skills.map((s) => (
-          <Card key={s.id} className="card-pad">
+          <Card key={s.id} className="card-pad" style={sel.has(s.id) ? { outline: '2px solid var(--accent)', outlineOffset: -1 } : undefined}>
             <div className="spread">
-              <div className="mono small" style={{ color: 'var(--lime)' }}>{s.title}</div>
+              <div className="row" style={{ gap: 8, minWidth: 0 }}>
+                <input type="checkbox" checked={sel.has(s.id)} onChange={() => toggle(s.id)} style={{ flexShrink: 0 }} />
+                <div className="mono small" style={{ color: 'var(--accent)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</div>
+              </div>
               <div className="row" style={{ gap: 6 }}>
                 <Badge kind={s.enabled ? 'live' : 'draft'}>{s.enabled ? 'active' : 'off'}</Badge>
                 <button className="btn btn-ghost btn-sm" onClick={() => { setEdit(s); setForm({ title: s.title, description: s.description, skill: s.skill }); setOpen(true); }}>Edit</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => delMany([s.id])}><IconTrash width={12} height={12} /></button>
               </div>
             </div>
             <div className="small muted" style={{ marginTop: 6 }}>{s.description}</div>

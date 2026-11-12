@@ -37,9 +37,50 @@ export async function resolveEntityId(agent: Agent): Promise<string> {
   return agent.entity_id;
 }
 
+/**
+ * Resolve the entity id AND say whether it came from a number actually bound to
+ * this agent. An unbound agent has no legitimate phone number ID - showing the
+ * seed's random value is worse than showing nothing.
+ */
+export async function resolveEntity(agent: Agent): Promise<{ entityId: string; bound: PhoneNumber | null }> {
+  let bound: PhoneNumber | null | undefined;
+  try {
+    if (isDemo()) {
+      const all = db().numbers;
+      bound = all.find((n) => n.agent_id === agent.id)
+        || all.find((n) => n.id === agent.phone_number_id)
+        || all.find((n) => n.wa_phone_number_id === agent.entity_id)
+        || null;
+    } else {
+      if (agent.phone_number_id) bound = await sbNumber(agent.phone_number_id);
+      if (!bound?.wa_phone_number_id) {
+        const list = await sbNumbers(agent.tenant_id);
+        bound = list.find((n) => n.agent_id === agent.id)
+          || list.find((n) => n.wa_phone_number_id === agent.entity_id)
+          || null;
+      }
+    }
+  } catch { bound = null; }
+
+  const id = bound?.wa_phone_number_id && PN_RE.test(bound.wa_phone_number_id)
+    ? bound.wa_phone_number_id
+    : agent.entity_id;
+  return { entityId: id, bound: bound || null };
+}
+
 /** Persist a corrected entity_id so every screen and every later call agrees. */
 export async function syncEntityId(agent: Agent, entityId?: string): Promise<string> {
-  const id = entityId || (await resolveEntityId(agent));
+  if (!entityId) {
+    const r = await resolveEntity(agent);
+    if (!r.bound) return agent.entity_id;          // unbound: nothing trustworthy to sync
+    if (r.entityId !== agent.entity_id) {
+      agent.entity_id = r.entityId;
+      if (isDemo()) Object.assign(agent, { entity_id: r.entityId });
+      else await sbUpdateAgent(agent.id, { entity_id: r.entityId } as Partial<Agent>);
+    }
+    return r.entityId;
+  }
+  const id = entityId;
   if (id && id !== agent.entity_id) {
     agent.entity_id = id;
     if (isDemo()) Object.assign(agent, { entity_id: id });

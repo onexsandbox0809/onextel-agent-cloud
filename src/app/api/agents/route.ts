@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { resolveEntity } from '@/lib/entity';
 import { getSession } from '@/lib/auth';
 import { canWrite, scopeOf, forbidden } from '@/lib/session-util';
 import { blendAgent, db, newId, nowIso, recordAudit, scopedAgents } from '@/lib/demo-db';
@@ -10,7 +11,11 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const scope = scopeOf(session);
   const agents = isDemo() ? scopedAgents(scope) : await sbAgents(scope);
-  return NextResponse.json({ agents });
+  const resolved = await Promise.all(agents.map(async (a) => {
+    const r = await resolveEntity(a);
+    return { ...a, entity_id: r.bound ? r.entityId : '', bound_number: r.bound ? { id: r.bound.id, display: r.bound.display } : null };
+  }));
+  return NextResponse.json({ agents: resolved });
 }
 
 export async function POST(req: Request) {

@@ -236,20 +236,38 @@ export async function DELETE(req: Request, ctx: Ctx) {
   const entityId = agent.entity_id;
   const body = await req.json().catch(() => ({}));
 
-  if (section === 'faqs') { agent.faqs = agent.faqs.filter((f) => f.id !== body.id); await persist(agent, { faqs: agent.faqs } as Partial<Agent>); }
-  else if (section === 'skills') { agent.skills = agent.skills.filter((s) => s.id !== body.id); await persist(agent, { skills: agent.skills } as Partial<Agent>); }
-  else if (section === 'tools') {
-    agent.connectors = agent.connectors.map((c) => ({ ...c, tools: c.tools.filter((t) => t.id !== body.id) }));
+  // Accept a single id or a batch: { id } or { ids: [...] }
+  const ids: string[] = Array.isArray(body.ids) ? body.ids.filter(Boolean) : body.id ? [body.id] : [];
+  if (!ids.length) return NextResponse.json({ error: 'Nothing selected to delete.' }, { status: 400 });
+
+  let deleted = 0;
+  if (section === 'faqs') {
+    const before = agent.faqs.length;
+    agent.faqs = agent.faqs.filter((f) => !ids.includes(f.id));
+    deleted = before - agent.faqs.length;
+    await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+  } else if (section === 'skills') {
+    const before = agent.skills.length;
+    agent.skills = agent.skills.filter((s) => !ids.includes(s.id));
+    deleted = before - agent.skills.length;
+    await persist(agent, { skills: agent.skills } as Partial<Agent>);
+  } else if (section === 'tools') {
+    agent.connectors = agent.connectors.map((c) => ({ ...c, tools: c.tools.filter((t) => !ids.includes(t.id)) }));
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
+    deleted = ids.length;
     const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
-    if (token) await meta.deleteTool(entityId, body.connector_id, body.id, token);
+    if (token && body.connector_id) {
+      for (const tid of ids) await meta.deleteTool(entityId, body.connector_id, tid, token).catch(() => null);
+    }
   } else if (section === 'connectors') {
-    agent.connectors = agent.connectors.filter((c) => c.id !== body.id);
+    const before = agent.connectors.length;
+    agent.connectors = agent.connectors.filter((c) => !ids.includes(c.id));
+    deleted = before - agent.connectors.length;
     await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
   } else return NextResponse.json({ error: 'Unsupported section' }, { status: 400 });
 
-  recordAudit(agent.tenant_id, session.user.email, `${section}.delete`, body.name || body.id);
-  return NextResponse.json({ ok: true });
+  recordAudit(agent.tenant_id, session.user.email, `${section}.delete`, `${deleted} item${deleted === 1 ? '' : 's'} (${ids.length} selected)`);
+  return NextResponse.json({ ok: true, deleted, requested: ids.length, note: section === 'faqs' || section === 'skills' ? 'Removed locally. Meta exposes no delete endpoint for FAQs or skills, so anything already pushed stays live there until you re-publish the agent.' : undefined });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
