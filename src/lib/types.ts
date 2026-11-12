@@ -63,9 +63,9 @@ export interface BusinessInfo {
   contact_info: { email: string; hours_of_operation: string; address: string };
 }
 
-export interface Faq { id: string; question: string; answer: string; category: string; updated_at: string }
+export interface Faq { id: string; question: string; answer: string; category: string; updated_at: string; synced?: boolean }
 export interface Skill {
-  id: string; title: string; description: string; skill: string; enabled: boolean; updated_at: string;
+  id: string; title: string; description: string; skill: string; enabled: boolean; updated_at: string; synced?: boolean;
 }
 export interface ConnectorTool {
   id: string; connector_id: string; name: string; description: string;

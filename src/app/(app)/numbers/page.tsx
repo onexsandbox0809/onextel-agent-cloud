@@ -23,7 +23,7 @@ export default function NumbersPage() {
   const [pinFor, setPinFor] = useState<string | null>(null);
   const [pin, setPin] = useState('');
   const [regBusy, setRegBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ id: string; agentId: string | null; mode: string; steps: Steps; error?: string } | null>(null);
+  const [result, setResult] = useState<{ id: string; agentId: string | null; agentIdSaved?: boolean; mode: string; steps: Steps; error?: string } | null>(null);
 
   const isAdmin = ses.data?.user.role === 'platform_admin';
   const tenantDefault = ses.data?.tenants[0]?.id || '';
@@ -71,7 +71,7 @@ export default function NumbersPage() {
     setResult(null);
     try {
       const r = await api<any>(`/api/numbers/${n.id}`, 'PATCH', { action: 'onboard', pin: withPin || '' });
-      setResult({ id: n.id, agentId: r.agent_id ?? null, mode: r.mode, steps: r.steps ?? [] });
+      setResult({ id: n.id, agentId: r.agent_id ?? null, agentIdSaved: r.agent_id_saved, mode: r.mode, steps: r.steps ?? [] });
       setNeedsPin(null);
       setPinFor(null);      // panel closes: nothing left to ask for
       setPin('');
@@ -188,6 +188,22 @@ export default function NumbersPage() {
               </div>
             )}
             {result.error && <div className="notice err">{result.error}</div>}
+            {result.agentId ? (
+              <div className="stack" style={{ gap: 6 }}>
+                <div className="tiny dim mono">AGENT ID (META)</div>
+                <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span className="mono small" style={{ wordBreak: 'break-all', flex: 1, minWidth: 200 }}>{result.agentId}</span>
+                  <button className="btn btn-sm" onClick={() => { navigator.clipboard?.writeText(result.agentId!); push('Agent ID copied.'); }}>Copy</button>
+                </div>
+                {result.agentIdSaved === false && (
+                  <div className="notice err" style={{ margin: 0 }}>
+                    Saved to Meta, but <b>not stored in your database</b> — the <span className="mono">meta_agent_id</span> column is missing.
+                    Copy the ID above, run <span className="mono">alter table public.phone_numbers add column if not exists meta_agent_id text;</span>,
+                    then paste it under <b>Fix IDs → Agent ID</b>.
+                  </div>
+                )}
+              </div>
+            ) : null}
             {result.steps.length > 0 && (
               <div className="stack" style={{ gap: 6 }}>
                 {result.steps.map((s) => (

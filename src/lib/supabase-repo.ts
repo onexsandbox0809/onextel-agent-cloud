@@ -58,7 +58,7 @@ export async function sbNumbers(tenantId: string | null): Promise<PhoneNumber[]>
 
 let metaAgentColumnMissing = false;
 
-export async function sbUpdateNumber(n: PhoneNumber) {
+export async function sbUpdateNumber(n: PhoneNumber): Promise<{ agentIdPersisted: boolean }> {
   const sb = serviceSupabase();
   const row: Record<string, unknown> = {
     status: n.status, agent_id: n.agent_id, registered_at: n.registered_at,
@@ -68,14 +68,14 @@ export async function sbUpdateNumber(n: PhoneNumber) {
   if (!metaAgentColumnMissing) row.meta_agent_id = n.meta_agent_id ?? null;
 
   const { error } = await sb.from('phone_numbers').update(row).eq('id', n.id);
-  if (!error) return;
+  if (!error) return { agentIdPersisted: !metaAgentColumnMissing };
   // Schema behind the build: persist everything else rather than failing the whole write.
   if (/meta_agent_id/i.test(error.message)) {
     metaAgentColumnMissing = true;
     delete row.meta_agent_id;
     const retry = await sb.from('phone_numbers').update(row).eq('id', n.id);
     if (retry.error) throw new Error(retry.error.message);
-    return;
+    return { agentIdPersisted: false };
   }
   throw new Error(error.message);
 }

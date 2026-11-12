@@ -10,7 +10,8 @@ export default function Settings() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', kind: 'graph_token', value: '', environment: 'production', tenant_id: '' });
   const { push } = useToast();
-  const logs = useApi<{ file: string; storage: string; text: string; status: any; lines: number }>('/api/logs');
+  const [chan, setChan] = useState('all');
+  const logs = useApi<{ file: string; storage: string; text: string; status: any; lines: number; perChannel?: Record<string, number> }>(`/api/logs${chan === 'all' ? '' : `?channel=${chan}`}`);
   const conn = useApi<any>('/api/meta-status');
   if (ses.loading || !ses.data) return <Skeleton h={420} />;
   const t = ses.data.tenant;
@@ -75,10 +76,17 @@ export default function Settings() {
                 headers (token redacted), payload, status and response. Stored as a daily <span className="mono tiny">.txt</span> in the Supabase Storage
                 bucket <span className="mono tiny">logs</span> so it survives restarts.
               </div>
+              <div className="row" style={{ gap: 4, marginTop: 10, flexWrap: 'wrap' }}>
+                {['all', 'register', 'onboarding', 'faq', 'skills', 'connectors', 'rollout', 'eval'].map((c) => (
+                  <button key={c} className={`tab ${chan === c ? 'active' : ''}`} style={{ padding: '5px 9px', fontSize: 11 }} onClick={() => setChan(c)}>
+                    {c}{chan === 'all' && c !== 'all' && logs.data?.perChannel?.[c] ? <span className="mono dim"> {logs.data.perChannel[c]}</span> : null}
+                  </button>
+                ))}
+              </div>
               <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                <a className="btn btn-primary btn-sm" href="/api/logs?download=1" download>Download log (.txt)</a>
+                <a className="btn btn-primary btn-sm" href={`/api/logs?download=1${chan === 'all' ? '' : `&channel=${chan}`}`} download>Download {chan === 'all' ? 'full' : chan} log (.txt)</a>
                 <button className="btn btn-sm" onClick={() => logs.reload()}>Refresh</button>
-                <span className="mono tiny dim">{logs.data?.file || '—'} · {logs.data?.lines || 0} lines</span>
+                <span className="mono tiny dim">{logs.data?.file || '—'} · {logs.data?.lines || 0} lines · IST</span>
               </div>
               {logs.data?.text ? (
                 <pre className="mono" style={{ marginTop: 10, maxHeight: 320, overflow: 'auto', background: 'var(--panel-2)', border: '1px solid var(--line)', padding: 10, fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>

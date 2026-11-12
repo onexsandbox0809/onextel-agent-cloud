@@ -40,8 +40,9 @@ async function load(id: string): Promise<PhoneNumber | undefined> {
   return (await sbNumber(id)) || undefined;
 }
 
-async function persist(n: PhoneNumber) {
-  if (!isDemo()) await sbUpdateNumber(n);
+async function persist(n: PhoneNumber): Promise<{ agentIdPersisted: boolean }> {
+  if (isDemo()) return { agentIdPersisted: true };
+  return sbUpdateNumber(n);
 }
 
 async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -122,12 +123,16 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
         number.registered_at = number.registered_at || nowIso();
         number.two_step_pin_set = number.two_step_pin_set || false;
         number.meta_agent_id = picked.id || number.meta_agent_id || null;
-        await persist(number);
+        const saved = await persist(number);
         recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${picked.id || 'unconfirmed'}`, picked.id ? 'critical' : 'warning');
         return NextResponse.json({
-          number, agent_id: picked.id, mode: 'graph', needs_pin: false, steps,
+          number, agent_id: picked.id, agent_id_saved: saved.agentIdPersisted, mode: 'graph', needs_pin: false, steps,
           raw_agent_value: picked.raw,
-          warning: picked.id ? undefined : `Onboarded, but Meta's response had no recognisable agent ID${picked.raw ? ` (got "${picked.raw.slice(0, 40)}")` : ''}. Check the raw response and paste the ID under Fix IDs if it exists in Meta Business Suite.`,
+          warning: !picked.id
+            ? `Onboarded, but Meta's response had no recognisable agent ID${picked.raw ? ` (got "${picked.raw.slice(0, 40)}")` : ''}. Check the raw response and paste the ID under Fix IDs if it exists in Meta Business Suite.`
+            : !saved.agentIdPersisted
+            ? `Meta returned agent ID ${picked.id} but it could NOT be saved: the phone_numbers.meta_agent_id column is missing. Copy the ID from this panel, then run: alter table public.phone_numbers add column if not exists meta_agent_id text; and paste it under Fix IDs → Agent ID.`
+            : undefined,
         });
       }
 
@@ -203,12 +208,14 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
     number.registered_at = nowIso();
     number.two_step_pin_set = true;
     number.meta_agent_id = picked2.id || number.meta_agent_id || null;
-    await persist(number);
+    const saved2 = await persist(number);
     recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${picked2.id || 'unconfirmed'}`, picked2.id ? 'critical' : 'warning');
     return NextResponse.json({
-      number, agent_id: picked2.id, mode: 'graph', needs_pin: false, steps,
+      number, agent_id: picked2.id, agent_id_saved: saved2.agentIdPersisted, mode: 'graph', needs_pin: false, steps,
       raw_agent_value: picked2.raw,
-      warning: picked2.id ? undefined
+      warning: picked2.id && !saved2.agentIdPersisted
+        ? `Meta returned agent ID ${picked2.id} but it could NOT be saved: the phone_numbers.meta_agent_id column is missing. Run: alter table public.phone_numbers add column if not exists meta_agent_id text; then paste the ID under Fix IDs → Agent ID.`
+        : picked2.id ? undefined
         : picked2.raw
         ? `Registered and onboarded, but Meta's response did not contain a numeric or pfbid agent ID (got "${picked2.raw.slice(0, 60)}"). Nothing was saved as the agent ID.`
         : 'Registered and onboarded, but the response had no agent ID field. Check the raw response; paste the ID under Fix IDs if it exists in Meta Business Suite.',

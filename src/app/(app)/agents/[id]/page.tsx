@@ -189,7 +189,21 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
   const [form, setForm] = useState({ question: '', answer: '', category: 'General' });
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const { push } = useToast();
+
+  const syncAll = async () => {
+    setSyncing(true);
+    try {
+      const r = await api<any>(`/api/agents/${agent.id}/sync`, 'POST', {});
+      const f = r.faqs || {}, k = r.skills || {};
+      push(`Meta now has ${f.pushed + f.duplicates}/${f.total} FAQs and ${k.pushed + k.duplicates}/${k.total} skills.` + (f.failed || k.failed ? ` ${f.failed + k.failed} failed.` : ''));
+      if (r.errors?.length) console.warn('sync errors', r.errors);
+      reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Sync failed', true); }
+    finally { setSyncing(false); }
+  };
+
   const list = agent.faqs.filter((f) => (f.question + f.answer).toLowerCase().includes(q.toLowerCase()));
   const allSel = list.length > 0 && list.every((f) => sel.has(f.id));
 
@@ -222,7 +236,10 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
       <div className="row" style={{ marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
         <input className="input" style={{ maxWidth: 300 }} placeholder="Search knowledge…" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="small dim">{agent.faqs.length} entries{list.length !== agent.faqs.length ? ` · ${list.length} shown` : ''}</span>
-        <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => { setEdit(null); setForm({ question: '', answer: '', category: 'General' }); setOpen(true); }}><IconPlus width={13} height={13} /> Add FAQ</button>
+        <button className="btn btn-sm" disabled={syncing} onClick={syncAll} style={{ marginLeft: 'auto' }}>
+          {syncing ? 'Pushing…' : 'Push all to Meta'}
+        </button>
+        <button className="btn btn-primary btn-sm" onClick={() => { setEdit(null); setForm({ question: '', answer: '', category: 'General' }); setOpen(true); }}><IconPlus width={13} height={13} /> Add FAQ</button>
       </div>
 
       {list.length > 0 && (
@@ -251,6 +268,7 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
               <div className="row" style={{ gap: 8 }}>
                 <span style={{ fontWeight: 550, fontSize: 12.5 }}>{f.question}</span>
                 <span className="badge draft" style={{ height: 17 }}>{f.category}</span>
+                <span className="badge" style={{ height: 17 }} title={f.synced ? 'Confirmed by Meta' : 'Not confirmed by Meta yet'}>{f.synced ? 'live' : 'unsynced'}</span>
               </div>
               <div className="small muted" style={{ marginTop: 3, lineHeight: 1.55 }}>{f.answer}</div>
             </div>
@@ -282,7 +300,20 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
   const [form, setForm] = useState({ title: '', description: '', skill: '' });
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const { push } = useToast();
+
+  const syncAll = async () => {
+    setSyncing(true);
+    try {
+      const r = await api<any>(`/api/agents/${agent.id}/sync`, 'POST', {});
+      const f = r.faqs || {}, k = r.skills || {};
+      push(`Meta now has ${f.pushed + f.duplicates}/${f.total} FAQs and ${k.pushed + k.duplicates}/${k.total} skills.` + (f.failed || k.failed ? ` ${f.failed + k.failed} failed.` : ''));
+      reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Sync failed', true); }
+    finally { setSyncing(false); }
+  };
+
   const allSel = agent.skills.length > 0 && agent.skills.every((s) => sel.has(s.id));
   const toggle = (id: string) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSel(allSel ? new Set() : new Set(agent.skills.map((s) => s.id)));
@@ -329,7 +360,10 @@ function Skills({ agent, reload }: { agent: Agent; reload: () => void }) {
             <button className="btn btn-ghost btn-sm" onClick={() => setSel(new Set())}>Clear</button>
           </>
         )}
-        <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={() => { setEdit(null); setForm({ title: '', description: '', skill: '' }); setOpen(true); }}><IconPlus width={13} height={13} /> New skill</button>
+        <button className="btn btn-sm" disabled={syncing} onClick={syncAll} style={{ marginLeft: 'auto' }}>
+          {syncing ? 'Pushing…' : 'Push all to Meta'}
+        </button>
+        <button className="btn btn-primary btn-sm" onClick={() => { setEdit(null); setForm({ title: '', description: '', skill: '' }); setOpen(true); }}><IconPlus width={13} height={13} /> New skill</button>
       </div>
       <div className="grid g2">
         {agent.skills.map((s) => (

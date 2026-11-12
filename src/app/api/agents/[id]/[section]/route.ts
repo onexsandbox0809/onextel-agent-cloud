@@ -118,20 +118,87 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     case 'publish': {
       const nextVersion = agent.version + 1;
-      const remote = token && agent.meta_agent_id
-        ? await meta.putSettings(entityId, agent.meta_agent_id, { rollout: { enabled: true }, handoff: agent.settings.handoff, followup: agent.settings.followup, ai_audience: agent.settings.ai_audience }, token)
-        : null;
+      const ti = metaTokenInfo();
+      if (!ti.present || ti.problems.length) {
+        return NextResponse.json({
+          error: ti.problems.length ? `Meta token misconfigured: ${ti.problems.join(' ')}`
+            : 'META_SYSTEM_USER_TOKEN is not set on this deployment — nothing was sent to Meta.',
+          hint: 'Set the env var in Vercel, then redeploy (env changes do not apply to an existing deployment).',
+        }, { status: 503 });
+      }
+      if (!agent.meta_agent_id) {
+        return NextResponse.json({
+          error: 'This agent has no Meta agent ID, so rollout cannot be enabled. Register the number (POST /agent_onboarding) or paste the agent ID under Numbers → Fix IDs → Agent ID.',
+        }, { status: 400 });
+      }
+      if (!/^\d{10,20}$/.test(entityId)) {
+        return NextResponse.json({ error: 'No Meta phone number ID is bound to this agent. Bind a number on the Numbers screen first.' }, { status: 400 });
+      }
+      const remote = await meta.putSettings(entityId, agent.meta_agent_id, {
+        rollout: { enabled: true }, handoff: agent.settings.handoff,
+        followup: agent.settings.followup, ai_audience: agent.settings.ai_audience,
+      }, token);
+      if (!remote.ok) {
+        return NextResponse.json({ agent, remote, error: `Meta rejected the rollout: ${remote.error || `HTTP ${remote.status}`}`, steps: [{ step: 'settings', http: remote.status, ok: false }] }, { status: 502 });
+      }
       await persist(agent, {
         status: 'live', version: nextVersion, published_at: nowIso(), health: Math.max(agent.health, 72),
         settings: { ...agent.settings, rollout: { enabled: true } },
       } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, 'agent.publish', `${agent.name} v${nextVersion}`, 'critical');
-      return NextResponse.json({ agent, remote, mode: remote ? 'graph' : 'not_sent', warning: remote ? undefined : 'Saved locally. No Meta token on this deployment, so rollout was NOT changed at Meta.' });
+      return NextResponse.json({ agent, remote, mode: 'graph', http: remote.status, rollout: { enabled: true } });
     }
     case 'pause': {
+      const ti = metaTokenInfo();
+      const token2 = ti.headerValue?.replace(/^Bearer\s+/i, '') || null;
+      if (!token2) return NextResponse.json({ error: 'No Meta token on this deployment — nothing was sent, so rollout is still enabled at Meta.' }, { status: 503 });
+      if (!agent.meta_agent_id) return NextResponse.json({ error: 'No Meta agent ID stored for this agent — cannot disable rollout at Meta.' }, { status: 400 });
+      const remote = await meta.putRollout(entityId, agent.meta_agent_id, false, token2);
+      if (!remote.ok) return NextResponse.json({ agent, remote, error: `Meta rejected the change: ${remote.error || `HTTP ${remote.status}`}` }, { status: 502 });
       await persist(agent, { status: 'paused', settings: { ...agent.settings, rollout: { enabled: false } } } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, 'agent.pause', agent.name, 'warning');
-      return NextResponse.json({ agent });
+      return NextResponse.json({ agent, remote, mode: 'graph' });
+    }
+    case 'sync': {
+      // Re-push every local FAQ and skill. HTTP 409 Duplicate is treated as success,
+      // so this is safe to run repeatedly and fills in anything a partial import missed.
+      if (!token) return NextResponse.json({ error: 'No Meta token on this deployment — nothing was sent.' }, { status: 503 });
+      if (!/^\d{10,20}$/.test(entityId)) return NextResponse.json({ error: 'No Meta phone number ID bound to this agent. Bind a number first.' }, { status: 400 });
+
+      const dup = (r: any) => !!r && r.ok === false && (r.status === 409 || /duplicate/i.test(String(r.error || '')));
+      let faqOk = 0, faqDup = 0, faqFail = 0, skillOk = 0, skillDup = 0, skillFail = 0;
+      const errors: string[] = [];
+
+      for (let i = 0; i < agent.faqs.length; i += 4) {
+        const batch = agent.faqs.slice(i, i + 4);
+        const res = await Promise.all(batch.map((f) => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
+        res.forEach((r: any, j) => {
+          if (r?.ok) { faqOk++; batch[j].synced = true; }
+          else if (dup(r)) { faqDup++; batch[j].synced = true; }
+          else { faqFail++; batch[j].synced = false; if (errors.length < 5) errors.push(`${batch[j].question.slice(0, 40)}: ${r?.error || 'error'}`); }
+        });
+      }
+
+      if (agent.meta_agent_id) {
+        for (let i = 0; i < agent.skills.length; i += 4) {
+          const batch = agent.skills.slice(i, i + 4);
+          const res = await Promise.all(batch.map((sk) => meta.createSkill(entityId, agent.meta_agent_id as string, { title: sk.title, description: sk.description, skill: sk.skill }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
+          res.forEach((r: any, j) => {
+            if (r?.ok) { skillOk++; batch[j].synced = true; }
+            else if (dup(r)) { skillDup++; batch[j].synced = true; }
+            else { skillFail++; batch[j].synced = false; if (errors.length < 8) errors.push(`${batch[j].title}: ${r?.error || 'error'}`); }
+          });
+        }
+        await persist(agent, { skills: agent.skills } as Partial<Agent>);
+      }
+      await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+      recordAudit(agent.tenant_id, session.user.email, 'agent.sync', `${faqOk + faqDup}/${agent.faqs.length} FAQs, ${skillOk + skillDup}/${agent.skills.length} skills`);
+      return NextResponse.json({
+        agent, mode: 'graph',
+        faqs: { total: agent.faqs.length, pushed: faqOk, duplicates: faqDup, failed: faqFail },
+        skills: { total: agent.skills.length, pushed: skillOk, duplicates: skillDup, failed: skillFail },
+        errors,
+      });
     }
     case 'rollout': {
       const enabled = body.enabled !== false;

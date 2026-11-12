@@ -14,6 +14,7 @@ export interface ImportResult {
   warnings: string[];
   errors: { row: number; error: string }[];
   created: string[];
+  meta?: { synced: number; duplicates: number; failed: number };
 }
 
 const norm = (k: string) => String(k).trim().toLowerCase().replace(/[\s\-./]+/g, '_');
@@ -63,7 +64,10 @@ async function persist(agent: Agent, patch: Partial<Agent>) {
   else await sbUpdateAgent(agent.id, patch);
 }
 
-async function push(items: (() => Promise<any>)[], limit = 5) {
+const isDuplicate = (r: any) =>
+  !!r && r.ok === false && (r.status === 409 || /duplicate/i.test(String(r.error || '')));
+
+async function push(items: (() => Promise<any>)[], limit = 4) {
   const results: any[] = [];
   for (let i = 0; i < items.length; i += limit) {
     results.push(...(await Promise.all(items.slice(i, i + limit).map((f) => f().catch((e) => ({ ok: false, error: String(e) }))))));
@@ -110,7 +114,15 @@ export async function importWorkbook(args: {
       recordAudit(agent.tenant_id, email, 'faq.import', `${fresh.length} FAQs from file`);
       if (token) {
         const res = await push(fresh.map((f) => () => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token)));
-        res.forEach((r, i) => { if (r && r.ok === false) out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r.error || 'error'}`); });
+        let synced = 0, dupes = 0, failed = 0;
+        res.forEach((r, i) => {
+          if (r && r.ok) { synced++; fresh[i].synced = true; }
+          else if (isDuplicate(r)) { dupes++; fresh[i].synced = true; }
+          else { failed++; out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r?.error || 'error'}`); }
+        });
+        out.meta = { synced, duplicates: dupes, failed };
+        if (dupes) out.warnings.push(`${dupes} FAQ${dupes === 1 ? '' : 's'} already existed in Meta (HTTP 409 Duplicate FAQ) and were treated as configured.`);
+        await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
       } else out.warnings.push('Saved locally. No Meta token configured, so nothing was pushed to Meta.');
     }
     return out;
@@ -142,7 +154,15 @@ export async function importWorkbook(args: {
       recordAudit(agent.tenant_id, email, 'skill.import', `${fresh.length} skills from file`);
       if (token && agent.meta_agent_id) {
         const res = await push(fresh.map((s) => () => meta.createSkill(entityId, agent.meta_agent_id as string, { title: s.title, description: s.description, skill: s.skill }, token)));
-        res.forEach((r, i) => { if (r && r.ok === false) out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r.error || 'error'}`); });
+        let synced = 0, dupes = 0, failed = 0;
+        res.forEach((r, i) => {
+          if (r && r.ok) { synced++; fresh[i].synced = true; }
+          else if (isDuplicate(r)) { dupes++; fresh[i].synced = true; }
+          else { failed++; out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r?.error || 'error'}`); }
+        });
+        out.meta = { synced, duplicates: dupes, failed };
+        if (dupes) out.warnings.push(`${dupes} skill${dupes === 1 ? '' : 's'} already existed in Meta and were treated as configured.`);
+        await persist(agent, { skills: agent.skills } as Partial<Agent>);
       } else out.warnings.push(token ? 'Saved locally. Register the number to get an agent ID before skills can sync to Meta.' : 'Saved locally. No Meta token configured.');
     }
     return out;
