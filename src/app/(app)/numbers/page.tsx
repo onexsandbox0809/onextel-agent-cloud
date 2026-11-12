@@ -50,21 +50,24 @@ export default function NumbersPage() {
     } finally { setSaving(false); }
   };
 
-  const register = async (n: PhoneNumber) => {
+  const [needsPin, setNeedsPin] = useState<string | null>(null);
+
+  const register = async (n: PhoneNumber, withPin?: string) => {
     setFormErr('');
-    if (!/^\d{6}$/.test(pin)) { setFormErr('PIN must be exactly 6 digits.'); return; }
     setRegBusy(n.id);
     setResult(null);
     try {
-      const r = await api<any>(`/api/numbers/${n.id}`, 'PATCH', { action: 'register', pin });
+      const r = await api<any>(`/api/numbers/${n.id}`, 'PATCH', { action: 'onboard', pin: withPin || '' });
       setResult({ id: n.id, agentId: r.agent_id ?? null, mode: r.mode, steps: r.steps ?? [] });
-      push(r.agent_id ? `Registered — agent ID ${r.agent_id}` : 'Registered.');
-      setPinFor(null); setPin('');
+      setNeedsPin(null);
+      push(r.agent_id ? `Onboarded — agent ID ${r.agent_id}` : 'Onboarded.');
       reload();
     } catch (e) {
       // the API returns structured diagnostics on 502 — surface them inline
-      const msg = e instanceof Error ? e.message : 'Registration failed';
+      const msg = e instanceof Error ? e.message : 'Onboarding failed';
       setResult({ id: n.id, agentId: null, mode: 'graph', steps: [], error: msg });
+      // 428-style: Meta wants the number registered first → reveal the optional PIN
+      if (/not registered yet|6-digit two-step PIN/i.test(msg)) { setNeedsPin(n.id); setPinFor(n.id); }
       push(msg, true);
     } finally { setRegBusy(null); }
   };
@@ -237,7 +240,7 @@ export default function NumbersPage() {
                     </div>
                     <div className="row" style={{ gap: 6 }}>
                       <button className="btn btn-sm" onClick={() => { setPinFor(open ? null : n.id); setPin(''); setFormErr(''); }}>
-                        {open ? 'Cancel' : n.status === 'active' ? 'Re-register' : 'Register'}
+                        {open ? 'Cancel' : n.status === 'active' ? 'Re-onboard' : 'Register agent'}
                       </button>
                     </div>
                   </div>
@@ -246,21 +249,35 @@ export default function NumbersPage() {
                     <div style={{ padding: '0 18px 16px', background: 'var(--panel-2)' }}>
                       <div className="stack" style={{ gap: 10, paddingTop: 12 }}>
                         <div className="notice info" style={{ margin: 0 }}>
-                          Calls <span className="mono">POST /{n.wa_phone_number_id}/register</span> then
-                          <span className="mono"> /agent_onboarding?channel=whatsapp</span>. Meta returns the agent ID, which is shown here and saved to the number.
+                          Calls <span className="mono">POST /{n.wa_phone_number_id}/agent_onboarding?channel=whatsapp</span>.
+                          No PIN needed — Meta returns the agent ID, which is shown here and saved to the number.
                         </div>
                         <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                          <div style={{ width: 190 }}>
-                            <Field label="6-digit two-step PIN">
-                              <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
-                                value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
-                            </Field>
-                          </div>
-                          <button className="btn btn-primary" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n)}>
-                            {regBusy === n.id ? 'Registering…' : 'Register with Meta'}
+                          <button className="btn btn-primary" disabled={regBusy === n.id} onClick={() => register(n)}>
+                            {regBusy === n.id ? 'Onboarding…' : n.status === 'active' ? 'Re-run onboarding' : 'Register agent with Meta'}
                           </button>
                           {n.meta_agent_id && <span className="mono tiny dim">agent {n.meta_agent_id}</span>}
                         </div>
+
+                        {needsPin === n.id && (
+                          <div className="stack" style={{ gap: 8, paddingTop: 4 }}>
+                            <div className="notice" style={{ margin: 0 }}>
+                              Meta reports this number is not registered on the Cloud API yet. Its <b>6-digit two-step PIN</b> is
+                              the one set on the number in WhatsApp Manager — only needed once, to register the number itself.
+                            </div>
+                            <div className="row" style={{ gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                              <div style={{ width: 190 }}>
+                                <Field label="6-digit two-step PIN (optional)">
+                                  <input className="input mono" inputMode="numeric" maxLength={6} placeholder="123456"
+                                    value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+                                </Field>
+                              </div>
+                              <button className="btn" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
+                                Register number, then onboard
+                              </button>
+                            </div>
+                          </div>
+                        )}
                         {formErr && <div className="notice err" style={{ margin: 0 }}>{formErr}</div>}
                       </div>
                     </div>
@@ -275,11 +292,11 @@ export default function NumbersPage() {
       <div className="grid g3" style={{ marginTop: 12 }}>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconShield width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Two-step verification</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}>Every live number needs a 6-digit PIN. Rotation is recorded in the audit log.</div>
+          <div className="small muted" style={{ marginTop: 6 }}>Two-step PIN belongs to the WhatsApp Cloud API number, not the agent. It's optional here and only requested when Meta asks.</div>
         </Card>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconBolt width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>Registration flow</span></div>
-          <div className="small muted" style={{ marginTop: 6 }}><span className="mono tiny">POST /register</span> then <span className="mono tiny">POST /agent_onboarding</span>. “Already registered” is treated as success.</div>
+          <div className="small muted" style={{ marginTop: 6 }}><span className="mono tiny">POST /agent_onboarding</span> is the agent registration — no PIN. The PIN only appears if Meta says the number itself is unregistered.</div>
         </Card>
         <Card className="card-pad">
           <div className="row" style={{ gap: 8, color: 'var(--accent)' }}><IconRefresh width={14} height={14} /><span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}>One agent per number</span></div>
