@@ -72,6 +72,12 @@ export async function sbTenants(): Promise<Tenant[]> {
   return (data || []) as Tenant[];
 }
 
+export async function sbCreateTenant(t: Tenant) {
+  const sb = serviceSupabase();
+  const { error } = await sb.from('tenants').insert(t);
+  if (error) throw new Error(error.message);
+}
+
 export async function sbUsers(tenantId: string | null): Promise<User[]> {
   const sb = serviceSupabase();
   let q = sb.from('profiles').select('id,tenant_id,name,email,role,status,last_active,avatar_hue');

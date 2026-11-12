@@ -24,13 +24,29 @@ const nav = [
   ]},
 ];
 
-export default function AppShell({ session, children }: { session: Session; children: React.ReactNode }) {
+export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const isAdmin = session.user.role === 'platform_admin';
+  const [session, setSession] = useState<Session | null>(null);
+  const [denied, setDenied] = useState(false);
+  const isAdmin = session?.user.role === 'platform_admin';
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/session', { cache: 'force-cache' })
+      .then(async (r) => {
+        if (r.status === 401) { if (alive) setDenied(true); return null; }
+        return r.json();
+      })
+      .then((d) => { if (alive && d) setSession(d); })
+      .catch(() => { if (alive) setDenied(true); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => { if (denied) router.replace('/login'); }, [denied, router]);
 
   useEffect(() => {
     const current = (document.documentElement.dataset.theme as 'light' | 'dark') || 'light';
@@ -90,10 +106,10 @@ export default function AppShell({ session, children }: { session: Session; chil
           <div className="plan-card">
             <div className="pc-top">
               <span className="mono tiny dim">CURRENT WORKSPACE</span>
-              <span className={`badge ${session.demo ? 'review' : 'live'}`} style={{ height: 17 }}>{session.demo ? 'DEMO' : 'LIVE'}</span>
+              <span className={`badge ${session?.demo ? 'review' : 'live'}`} style={{ height: 17 }}>{session?.demo ? 'DEMO' : 'LIVE'}</span>
             </div>
-            <div style={{ fontWeight: 600, fontSize: 12.5, marginTop: 6 }}>{session.tenant?.name || 'Onextel Platform'}</div>
-            <div className="tiny dim mono" style={{ marginTop: 2 }}>{session.tenant ? `${session.tenant.plan.toUpperCase()} · ${session.tenant.region}` : 'ALL TENANTS'}</div>
+            <div style={{ fontWeight: 600, fontSize: 12.5, marginTop: 6 }}>{session?.tenant?.name || 'Onextel Platform'}</div>
+            <div className="tiny dim mono" style={{ marginTop: 2 }}>{session?.tenant ? `${session.tenant.plan.toUpperCase()} · ${session.tenant.region}` : 'ALL TENANTS'}</div>
           </div>
         </div>
       </aside>
@@ -102,7 +118,7 @@ export default function AppShell({ session, children }: { session: Session; chil
         <header className="topbar">
           <button className="btn btn-ghost btn-sm" style={{ display: 'none' }} onClick={() => setOpen(!open)}>☰</button>
           <div className="crumb">
-            <span className="dim">{isAdmin ? 'Platform' : session.tenant?.name}</span>
+            <span className="dim">{isAdmin ? 'Platform' : session?.tenant?.name || 'Workspace'}</span>
             <span className="sep">/</span>
             <b>{nav.flatMap((g) => g.items).concat([{ href: '/admin/tenants', label: 'Tenants' }, { href: '/admin/agents', label: 'All agents' }] as any).find((i) => path.startsWith(i.href))?.label || 'Overview'}</b>
           </div>
@@ -121,14 +137,14 @@ export default function AppShell({ session, children }: { session: Session; chil
             </button>
             <div style={{ position: 'relative' }}>
               <button className="row" style={{ background: 'none', border: 'none', padding: 0 }} onClick={() => setMenu(!menu)}>
-                <Avatar name={session.user.name} hue={session.user.avatar_hue} />
+                <Avatar name={session?.user.name || '··'} hue={session?.user.avatar_hue ?? 74} />
               </button>
               {menu && (
                 <div className="card" style={{ position: 'absolute', right: 0, top: 36, width: 224, padding: 8, zIndex: 50 }}>
                   <div style={{ padding: '6px 8px 8px', borderBottom: '1px solid var(--line)' }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>{session.user.name}</div>
-                    <div className="tiny dim mono">{session.user.email}</div>
-                    <div className="badge info" style={{ marginTop: 6 }}>{session.user.role.replace('_', ' ')}</div>
+                    <div style={{ fontSize: 12.5, fontWeight: 600 }}>{session?.user.name}</div>
+                    <div className="tiny dim mono">{session?.user.email}</div>
+                    <div className="badge info" style={{ marginTop: 6 }}>{session?.user.role.replace(/_/g, ' ')}</div>
                   </div>
                   <Link href="/settings" className="nav-item" style={{ marginTop: 6 }}><IconSettings width={14} height={14} /> Settings</Link>
                   <Link href="/team" className="nav-item"><IconUsers width={14} height={14} /> Team</Link>
@@ -140,7 +156,15 @@ export default function AppShell({ session, children }: { session: Session; chil
             </div>
           </div>
         </header>
-        <main className="content">{children}</main>
+        <main className="content">
+          {session ? children : (
+            <div className="stack" style={{ gap: 14 }}>
+              <div style={{ width: 240, height: 26, borderRadius: 7, background: 'var(--skel-a)' }} />
+              <div className="grid g4">{[0, 1, 2, 3].map((i) => <div key={i} className="card" style={{ height: 92 }} />)}</div>
+              <div className="card" style={{ height: 320 }} />
+            </div>
+          )}
+        </main>
       </div>
     </div>
   );

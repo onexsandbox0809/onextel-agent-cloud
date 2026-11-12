@@ -66,13 +66,14 @@ export async function POST(req: Request, ctx: Ctx) {
       }, token) : null;
       if (remote?.ok) { (conn as any).status = 'active'; (conn as any).synced_at = nowIso(); await persist(agent, { connectors: agent.connectors } as Partial<Agent>); }
       recordAudit(agent.tenant_id, session.user.email, 'connector.create', conn.name);
-      return NextResponse.json({ connector: conn, remote });
+      return NextResponse.json({ connector: conn, remote }, { status: 201 });
     }
     case 'tools': {
-      const connector = agent.connectors.find((c) => c.id === body.connector_id);
-      if (!connector) return NextResponse.json({ error: 'Connector not found.' }, { status: 404 });
       if (!body.name?.trim()) return NextResponse.json({ error: 'Tool name is required.' }, { status: 400 });
       if (!/^[a-z0-9_]{1,64}$/.test(body.name)) return NextResponse.json({ error: 'Tool names must be snake_case (a–z, 0–9, _).' }, { status: 400 });
+      if (!body.connector_id) return NextResponse.json({ error: 'Select a connector for this tool.' }, { status: 400 });
+      const connector = agent.connectors.find((c) => c.id === body.connector_id);
+      if (!connector) return NextResponse.json({ error: 'Connector not found.' }, { status: 404 });
       const tool = {
         id: newId('tool'), connector_id: connector.id, name: body.name, description: body.description || '',
         method: body.method || 'GET', path: body.path || '/', path_params: body.path_params || [],
@@ -84,7 +85,7 @@ export async function POST(req: Request, ctx: Ctx) {
       await persist(agent, { connectors: agent.connectors } as Partial<Agent>);
       const remote = token ? await meta.createTool(agent.entity_id, connector.id, toToolDefinition(tool), token) : null;
       recordAudit(agent.tenant_id, session.user.email, 'tool.create', tool.name);
-      return NextResponse.json({ tool, remote });
+      return NextResponse.json({ tool, remote }, { status: 201 });
     }
     case 'publish': {
       const nextVersion = agent.version + 1;
