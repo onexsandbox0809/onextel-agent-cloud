@@ -125,7 +125,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="topbar-right">
             <div className="row chip" style={{ height: 28, paddingRight: 6 }}>
               <IconSearch width={13} height={13} />
-              <span className="small dim">Search agents, numbers, PNR…</span>
+              <span className="small dim">Search agents, numbers, conversations…</span>
               <span className="kbd">⌘K</span>
             </div>
             <button className="theme-btn" onClick={toggleTheme} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>

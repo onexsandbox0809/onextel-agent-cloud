@@ -136,8 +136,20 @@ export const meta = {
   putBusinessInfo: (entityId: string, info: unknown, token?: string | null) =>
     graph(`${entityId}/agent_config/business_info`, { method: 'PUT', body: info, token, apiVersion: '1.0.0' }),
 
-  createFaq: (entityId: string, faq: { question: string; answer: string }, token?: string | null) =>
-    graph(`${entityId}/agent_config/faq`, { method: 'POST', body: faq, token, apiVersion: '1.0.0' }),
+  createFaq: (entityId: string, faq: { question: string; answer: string; metadata?: Record<string, string> }, token?: string | null) =>
+    graph(`${entityId}/agent_config/faq`, { method: 'POST', body: faq, token, apiVersion: '2.0.0' }),
+
+  listFaqs: (entityId: string, token?: string | null) =>
+    graph(`${entityId}/agent_config/faq`, { token, apiVersion: '2.0.0' }),
+
+  getFaq: (entityId: string, faqId: string, token?: string | null) =>
+    graph(`${entityId}/agent_config/faq/${encodeURIComponent(faqId)}`, { token, apiVersion: '2.0.0' }),
+
+  updateFaq: (entityId: string, faqId: string, faq: { question: string; answer: string }, token?: string | null) =>
+    graph(`${entityId}/agent_config/faq/${encodeURIComponent(faqId)}`, { method: 'PUT', body: faq, token, apiVersion: '2.0.0' }),
+
+  deleteFaq: (entityId: string, faqId: string, token?: string | null) =>
+    graph(`${entityId}/agent_config/faq/${encodeURIComponent(faqId)}`, { method: 'DELETE', token, apiVersion: '2.0.0' }),
 
   createSkill: (entityId: string, agentId: string, skill: unknown, token?: string | null) =>
     graph(`${entityId}/agent_config/skills?agent_id=${encodeURIComponent(agentId)}`, {
@@ -188,7 +200,10 @@ export const META_ENDPOINTS = [
   { op: 'Agent settings', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/settings?agent_id=', version: '2.0.0', note: 'rollout/handoff' },
   { op: 'Rollout toggle', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/settings?agent_id=', version: '1.0.0', note: 'publish / pause' },
   { op: 'Business info', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/business_info', version: '1.0.0', note: '' },
-  { op: 'Create FAQ', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/faq', version: '1.0.0', note: 'one Q&A per call' },
+  { op: 'Create FAQ', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/faq', version: '2.0.0', note: 'returns id' },
+  { op: 'List FAQs', method: 'GET', host: 'api.facebook.com', path: '{id}/agent_config/faq', version: '2.0.0', note: 'publish status' },
+  { op: 'Update FAQ', method: 'PUT', host: 'api.facebook.com', path: '{id}/agent_config/faq/{fid}', version: '2.0.0', note: 'id may change' },
+  { op: 'Delete FAQ', method: 'DELETE', host: 'api.facebook.com', path: '{id}/agent_config/faq/{fid}', version: '2.0.0', note: '204 on success' },
   { op: 'Create skill', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_config/skills?agent_id=', version: '2.0.0', note: '' },
   { op: 'Create connector', method: 'POST', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },
   { op: 'List connectors', method: 'GET', host: 'api.facebook.com', path: '{id}/agent_connectors', version: '2.0.0', note: '' },

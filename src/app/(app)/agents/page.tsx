@@ -123,7 +123,7 @@ function CreateAgent({ open, onClose, numbers, isAdmin, tenants, onCreated }: {
             </select>
           </Field>
         )}
-        <Field label="Agent name"><input className="input" placeholder="e.g. Booking Support — Hindi" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+        <Field label="Agent name"><input className="input" placeholder="e.g. Support — Hindi" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="Description" hint="Shown to operators. Not sent to Meta."><textarea className="textarea" placeholder="What this agent handles…" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
         <Field label="WhatsApp number" hint="Unassigned numbers can be bound later from the Numbers screen.">
           <select className="select" value={form.phone_number_id} onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })}>

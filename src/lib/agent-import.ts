@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import type { Agent } from './types';
 import { newId, nowIso, recordAudit } from './demo-db';
 import { isDemo } from './env';
-import { sbUpdateAgent } from './supabase-repo';
+import { sbAgent, sbUpdateAgent } from './supabase-repo';
 import { meta, toToolDefinition } from './meta';
 
 export const MAX_IMPORT_ROWS = 300;
@@ -15,6 +15,7 @@ export interface ImportResult {
   errors: { row: number; error: string }[];
   created: string[];
   meta?: { synced: number; duplicates: number; failed: number };
+  stored?: number | null;
 }
 
 const norm = (k: string) => String(k).trim().toLowerCase().replace(/[\s\-./]+/g, '_');
@@ -62,6 +63,16 @@ function parseParams(v: any) {
 async function persist(agent: Agent, patch: Partial<Agent>) {
   if (isDemo()) Object.assign(agent, patch);
   else await sbUpdateAgent(agent.id, patch);
+}
+
+/** Re-read the agent to prove the write landed. Returns null when it cannot be verified. */
+async function verify(agentId: string, section: 'faqs' | 'skills' | 'connectors') {
+  if (isDemo()) return null;
+  try {
+    const fresh = await sbAgent(agentId);
+    if (!fresh) return null;
+    return section === 'faqs' ? fresh.faqs.length : section === 'skills' ? fresh.skills.length : fresh.connectors.length;
+  } catch { return null; }
 }
 
 const isDuplicate = (r: any) =>
@@ -112,11 +123,15 @@ export async function importWorkbook(args: {
       out.imported = fresh.length;
       out.created = fresh.slice(0, 5).map((f) => f.question);
       recordAudit(agent.tenant_id, email, 'faq.import', `${fresh.length} FAQs from file`);
+      const storedFaqs = await verify(agent.id, 'faqs');
+      if (storedFaqs !== null && storedFaqs < fresh.length) {
+        out.warnings.push(`Only ${storedFaqs} of ${fresh.length} FAQs are stored on the agent — the database write did not fully land. Check the agent row in Supabase (agents.faqs).`);
+      }
       if (token) {
         const res = await push(fresh.map((f) => () => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token)));
         let synced = 0, dupes = 0, failed = 0;
         res.forEach((r, i) => {
-          if (r && r.ok) { synced++; fresh[i].synced = true; }
+          if (r && r.ok) { synced++; fresh[i].synced = true; fresh[i].meta_id = (r.data as any)?.id ?? null; }
           else if (isDuplicate(r)) { dupes++; fresh[i].synced = true; }
           else { failed++; out.warnings.push(`Row ${i + 2}: saved locally, Meta rejected it — ${r?.error || 'error'}`); }
         });
@@ -152,6 +167,10 @@ export async function importWorkbook(args: {
       out.imported = fresh.length;
       out.created = fresh.map((s) => s.title);
       recordAudit(agent.tenant_id, email, 'skill.import', `${fresh.length} skills from file`);
+      const storedSkills = await verify(agent.id, 'skills');
+      if (storedSkills !== null && storedSkills < fresh.length) {
+        out.warnings.push(`Only ${storedSkills} of ${fresh.length} skills are stored on the agent — the database write did not fully land.`);
+      }
       if (token && agent.meta_agent_id) {
         const res = await push(fresh.map((s) => () => meta.createSkill(entityId, agent.meta_agent_id as string, { title: s.title, description: s.description, skill: s.skill }, token)));
         let synced = 0, dupes = 0, failed = 0;

@@ -68,6 +68,24 @@ export async function resolveEntity(agent: Agent): Promise<{ entityId: string; b
   return { entityId: id, bound: bound || null };
 }
 
+/**
+ * The Meta agent id can live on either the agent row or the phone number row.
+ * The number is where /agent_onboarding writes it, so fall back to it - otherwise
+ * publish/rollout refuse to run even though the ID exists.
+ */
+export async function resolveAgentId(agent: Agent): Promise<{ agentId: string | null; source: 'agent' | 'number' | null; bound: PhoneNumber | null }> {
+  const { bound } = await resolveEntity(agent);
+  if (agent.meta_agent_id) return { agentId: agent.meta_agent_id, source: 'agent', bound };
+  if (bound?.meta_agent_id) {
+    // adopt it onto the agent so both rows agree
+    agent.meta_agent_id = bound.meta_agent_id;
+    if (isDemo()) Object.assign(agent, { meta_agent_id: bound.meta_agent_id });
+    else await sbUpdateAgent(agent.id, { meta_agent_id: bound.meta_agent_id } as Partial<Agent>).catch(() => null);
+    return { agentId: bound.meta_agent_id, source: 'number', bound };
+  }
+  return { agentId: null, source: null, bound };
+}
+
 /** Persist a corrected entity_id so every screen and every later call agrees. */
 export async function syncEntityId(agent: Agent, entityId?: string): Promise<string> {
   if (!entityId) {

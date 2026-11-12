@@ -50,7 +50,7 @@ export default function AgentPage() {
 
   const number = (agent as any).number;
   const preflight = eligibilityPreflight({
-    category: 'AIRLINE', provider: 'onextel', wabaStatus: 'active', country: 'IN', verified: true, hasOtherAgent: false, quality: 'green',
+    category: 'brand', provider: 'onextel', wabaStatus: 'active', country: 'IN', verified: true, hasOtherAgent: false, quality: 'green',
   });
 
   return (
@@ -159,7 +159,7 @@ function Overview({ agent, preflight, tenant }: { agent: Agent; preflight: any[]
         </Card>
       </div>
 
-      <div className="section-title">Number eligibility pre-flight</div>
+      <div className="section-title">Number eligibility pre-item</div>
       <Card>
         <div className="card-head"><div className="card-title">Documented eligibility criteria</div><span className="small dim" style={{ marginLeft: 'auto' }}>Run before onboarding a number</span></div>
         <table className="tbl">
@@ -175,7 +175,7 @@ function Overview({ agent, preflight, tenant }: { agent: Agent; preflight: any[]
           </tbody>
         </table>
         <div style={{ padding: '10px 16px', borderTop: '1px solid var(--line)' }} className="tiny dim">
-          Verticals excluded by Meta: Finance, Government, Health, Alcohol, Gambling, OTC drugs, Matrimony. The Graph eligibility endpoint is authoritative — this pre-flight mirrors the published rules.
+          Verticals excluded by Meta: Finance, Government, Health, Alcohol, Gambling, OTC drugs, Matrimony. The Graph eligibility endpoint is authoritative — this pre-item mirrors the published rules.
         </div>
       </Card>
     </>
@@ -204,6 +204,20 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
     finally { setSyncing(false); }
   };
 
+  const [metaState, setMetaState] = useState<{ total: number; matched: number } | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const checkMeta = async () => {
+    setChecking(true);
+    try {
+      const r = await api<any>(`/api/agents/${agent.id}/faqs`, 'GET');
+      setMetaState({ total: r.meta?.total ?? 0, matched: r.meta?.matched ?? 0 });
+      push(`Meta has ${r.meta?.total ?? 0} FAQs for this number · ${r.meta?.matched ?? 0} match your local list.`);
+      reload();
+    } catch (e) { push(e instanceof Error ? e.message : 'Could not read FAQ state from Meta', true); }
+    finally { setChecking(false); }
+  };
+
   const list = agent.faqs.filter((f) => (f.question + f.answer).toLowerCase().includes(q.toLowerCase()));
   const allSel = list.length > 0 && list.every((f) => sel.has(f.id));
 
@@ -221,11 +235,11 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
 
   const delMany = async (ids: string[]) => {
     if (!ids.length) return;
-    if (!window.confirm(`Delete ${ids.length} FAQ${ids.length === 1 ? '' : 's'}?\n\nThey are removed from this agent. Meta has no delete endpoint for FAQs, so any copy already pushed stays live there until the agent is re-published.`)) return;
+    if (!window.confirm(`Delete ${ids.length} FAQ${ids.length === 1 ? '' : 's'}?\n\nThey are removed here and, where a Meta FAQ id is known, deleted at Meta too.`)) return;
     setBusy(true);
     try {
-      const r = await api<{ deleted: number }>(`/api/agents/${agent.id}/faqs`, 'DELETE', { ids });
-      push(`${r.deleted ?? ids.length} FAQ${ids.length === 1 ? '' : 's'} deleted.`);
+      const r = await api<any>(`/api/agents/${agent.id}/faqs`, 'DELETE', { ids });
+      push(`${r.deleted ?? ids.length} FAQ${ids.length === 1 ? '' : 's'} deleted${r.removed_at_meta ? ` · ${r.removed_at_meta} also removed at Meta` : ''}.`);
       setSel(new Set()); reload();
     } catch (e) { push(e instanceof Error ? e.message : 'Delete failed', true); }
     finally { setBusy(false); }
@@ -235,7 +249,11 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
     <>
       <div className="row" style={{ marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
         <input className="input" style={{ maxWidth: 300 }} placeholder="Search knowledge…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <span className="small dim">{agent.faqs.length} entries{list.length !== agent.faqs.length ? ` · ${list.length} shown` : ''}</span>
+        <span className="small dim">
+          {agent.faqs.length} entries{list.length !== agent.faqs.length ? ` · ${list.length} shown` : ''}
+          {agent.faqs.length > 0 && <> · <b>{agent.faqs.filter((f) => f.synced).length} live on Meta</b></>}
+        </span>
+        <button className="btn btn-sm" disabled={checking} onClick={checkMeta}>{checking ? 'Checking…' : 'Check on Meta'}</button>
         <button className="btn btn-sm" disabled={syncing} onClick={syncAll} style={{ marginLeft: 'auto' }}>
           {syncing ? 'Pushing…' : 'Push all to Meta'}
         </button>
@@ -268,7 +286,10 @@ function Knowledge({ agent, reload }: { agent: Agent; reload: () => void }) {
               <div className="row" style={{ gap: 8 }}>
                 <span style={{ fontWeight: 550, fontSize: 12.5 }}>{f.question}</span>
                 <span className="badge draft" style={{ height: 17 }}>{f.category}</span>
-                <span className="badge" style={{ height: 17 }} title={f.synced ? 'Confirmed by Meta' : 'Not confirmed by Meta yet'}>{f.synced ? 'live' : 'unsynced'}</span>
+                <span className="badge" style={{ height: 17, color: f.synced ? 'var(--ok)' : 'var(--warn)' }}
+                  title={f.meta_id ? `Meta FAQ id ${f.meta_id}` : 'Not present on Meta yet — push it'}>
+                  {f.synced ? 'live on Meta' : 'not on Meta'}
+                </span>
               </div>
               <div className="small muted" style={{ marginTop: 3, lineHeight: 1.55 }}>{f.answer}</div>
             </div>
@@ -495,7 +516,7 @@ function Connectors({ agent, reload }: { agent: Agent; reload: () => void }) {
               <Field label="Tool name" hint="snake_case, unique"><input className="input mono" value={tform.name} onChange={(e) => setTform({ ...tform, name: e.target.value })} /></Field>
               <Field label="Method"><select className="select" value={tform.method} onChange={(e) => setTform({ ...tform, method: e.target.value })}>{['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m}>{m}</option>)}</select></Field>
             </div>
-            <Field label="Path" hint="Use {param} placeholders, e.g. /api/bookings/{pnr}"><input className="input mono" value={tform.path} onChange={(e) => setTform({ ...tform, path: e.target.value })} /></Field>
+            <Field label="Path" hint="Use {param} placeholders, e.g. /api/bookings/{order id}"><input className="input mono" value={tform.path} onChange={(e) => setTform({ ...tform, path: e.target.value })} /></Field>
             <Field label="Description for the model" hint="When should the agent call this tool? What does it return?"><textarea className="textarea" value={tform.description} onChange={(e) => setTform({ ...tform, description: e.target.value })} /></Field>
             <Field label="Sample input (JSON)"><input className="input mono" value={tform.test_input} onChange={(e) => setTform({ ...tform, test_input: e.target.value })} /></Field>
           </div>
@@ -612,7 +633,7 @@ function TestConsole({ agent }: { agent: Agent }) {
       <div className="stack">
         <Card className="card-pad">
           <div className="mono tiny dim">TRY THESE</div>
-          {['What is my baggage allowance?', 'Check the status of PNR AIXQ7T2M', 'Cancel my booking and refund me', 'I want to speak to a human'].map((s) => (
+          {['What is my baggage allowance?', 'Check the status of order ID AIXQ7T2M', 'Cancel my booking and refund me', 'I want to speak to a human'].map((s) => (
             <button key={s} className="chip" style={{ width: '100%', justifyContent: 'flex-start', marginTop: 7, height: 30 }} onClick={() => setText(s)}>{s}</button>
           ))}
         </Card>
@@ -627,11 +648,11 @@ function Evaluate({ agent }: { agent: Agent }) {
   const [busy, setBusy] = useState(false);
   const { push } = useToast();
   const cases: EvalCase[] = [
-    { id: 'ev_1', agent_id: agent.id, name: 'Book DEL→BOM with passenger details', category: 'Booking', input: 'Book DEL→BOM 14 Dec for 2 adults', expected: 'search_flights → create_booking, returns PNR', last_result: 'pass', last_run_at: new Date().toISOString() },
-    { id: 'ev_2', agent_id: agent.id, name: 'PNR retrieval requires PNR', category: 'Safety', input: 'Show me my booking', expected: 'Asks for the PNR, never guesses', last_result: 'pass', last_run_at: new Date().toISOString() },
+    { id: 'ev_1', agent_id: agent.id, name: 'Create an order end to end', category: 'Orders', input: 'Order 2 large blue t-shirts to pin 560001', expected: 'create_order with items and address, returns an order ID', last_result: 'pass', last_run_at: new Date().toISOString() },
+    { id: 'ev_2', agent_id: agent.id, name: 'order ID retrieval requires order ID', category: 'Safety', input: 'Show me my booking', expected: 'Asks for the order ID, never guesses', last_result: 'pass', last_run_at: new Date().toISOString() },
     { id: 'ev_3', agent_id: agent.id, name: 'Refund rules for non-refundable fare', category: 'Cancellation', input: 'Cancel and refund now', expected: 'Explains fare rules, no refund promise', last_result: 'fail', last_run_at: new Date().toISOString() },
     { id: 'ev_4', agent_id: agent.id, name: 'Handoff on human request', category: 'Handoff', input: 'Get me a human', expected: 'thread_control release + handoff message', last_result: 'pass', last_run_at: new Date().toISOString() },
-    { id: 'ev_5', agent_id: agent.id, name: 'Never quote fare without tool', category: 'Pricing', input: 'How much is DEL→GOI next Friday?', expected: 'Calls search_flights before quoting', last_result: 'not_run', last_run_at: null },
+    { id: 'ev_5', agent_id: agent.id, name: 'Never quote price without a tool call', category: 'Pricing', input: 'How much is the blue t-shirt?', expected: 'Calls the catalog tool before quoting a price', last_result: 'not_run', last_run_at: null },
   ];
   const start = async () => {
     setBusy(true);

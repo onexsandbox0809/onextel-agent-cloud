@@ -6,7 +6,7 @@ import { isDemo, metaTokenInfo } from '@/lib/env';
 import { sbAgent, sbUpdateAgent } from '@/lib/supabase-repo';
 import { meta, toToolDefinition } from '@/lib/meta';
 import { importWorkbook, MAX_IMPORT_ROWS } from '@/lib/agent-import';
-import { resolveEntityId, syncEntityId } from '@/lib/entity';
+import { resolveAgentId, resolveEntityId, syncEntityId } from '@/lib/entity';
 import type { Agent } from '@/lib/types';
 
 type Ctx = { params: Promise<{ id: string; section: string }> };
@@ -69,14 +69,19 @@ export async function POST(req: Request, ctx: Ctx) {
       const faq = { id: newId('faq'), question: body.question, answer: body.answer, category: body.category || 'General', updated_at: nowIso() };
       await persist(agent, { faqs: [faq, ...agent.faqs] } as Partial<Agent>);
       const remote = token ? await meta.createFaq(entityId, { question: faq.question, answer: faq.answer }, token) : null;
+      if (remote?.ok) {
+        (faq as any).meta_id = (remote.data as any)?.id ?? null;
+        (faq as any).synced = true;
+        await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+      }
       recordAudit(agent.tenant_id, session.user.email, 'faq.create', faq.question);
-      return NextResponse.json({ faq, remote });
+      return NextResponse.json({ faq, remote, meta_id: (faq as any).meta_id ?? null });
     }
     case 'skills': {
       if (!body.title?.trim() || !body.skill?.trim()) return NextResponse.json({ error: 'Title and skill instructions are required.' }, { status: 400 });
       const skill = { id: newId('sk'), title: body.title, description: body.description || `Apply for: ${body.title}`, skill: body.skill, enabled: body.enabled !== false, updated_at: nowIso() };
       await persist(agent, { skills: [skill, ...agent.skills] } as Partial<Agent>);
-      const remote = token && agent.meta_agent_id ? await meta.createSkill(entityId, agent.meta_agent_id, { title: skill.title, description: skill.description, skill: skill.skill }, token) : null;
+      const remote = token && agent.meta_agent_id ? await meta.createSkill(entityId, (await resolveAgentId(agent)).agentId as string, { title: skill.title, description: skill.description, skill: skill.skill }, token) : null;
       recordAudit(agent.tenant_id, session.user.email, 'skill.create', skill.title);
       return NextResponse.json({ skill, remote });
     }
@@ -126,15 +131,18 @@ export async function POST(req: Request, ctx: Ctx) {
           hint: 'Set the env var in Vercel, then redeploy (env changes do not apply to an existing deployment).',
         }, { status: 503 });
       }
-      if (!agent.meta_agent_id) {
+      const resolved = await resolveAgentId(agent);
+      if (!resolved.agentId) {
         return NextResponse.json({
-          error: 'This agent has no Meta agent ID, so rollout cannot be enabled. Register the number (POST /agent_onboarding) or paste the agent ID under Numbers → Fix IDs → Agent ID.',
+          error: 'No Meta agent ID found on this agent or on its bound number. Register the number (POST /agent_onboarding) or paste the ID under Numbers → Fix IDs → Agent ID.',
+          hint: 'Numbers screen shows the agent ID on each row after a successful onboarding.',
         }, { status: 400 });
       }
+      agent.meta_agent_id = resolved.agentId;
       if (!/^\d{10,20}$/.test(entityId)) {
         return NextResponse.json({ error: 'No Meta phone number ID is bound to this agent. Bind a number on the Numbers screen first.' }, { status: 400 });
       }
-      const remote = await meta.putSettings(entityId, agent.meta_agent_id, {
+      const remote = await meta.putSettings(entityId, resolved.agentId, {
         rollout: { enabled: true }, handoff: agent.settings.handoff,
         followup: agent.settings.followup, ai_audience: agent.settings.ai_audience,
       }, token);
@@ -152,8 +160,9 @@ export async function POST(req: Request, ctx: Ctx) {
       const ti = metaTokenInfo();
       const token2 = ti.headerValue?.replace(/^Bearer\s+/i, '') || null;
       if (!token2) return NextResponse.json({ error: 'No Meta token on this deployment — nothing was sent, so rollout is still enabled at Meta.' }, { status: 503 });
-      if (!agent.meta_agent_id) return NextResponse.json({ error: 'No Meta agent ID stored for this agent — cannot disable rollout at Meta.' }, { status: 400 });
-      const remote = await meta.putRollout(entityId, agent.meta_agent_id, false, token2);
+      const resolvedPause = await resolveAgentId(agent);
+      if (!resolvedPause.agentId) return NextResponse.json({ error: 'No Meta agent ID on this agent or its bound number — cannot disable rollout at Meta.' }, { status: 400 });
+      const remote = await meta.putRollout(entityId, resolvedPause.agentId, false, token2);
       if (!remote.ok) return NextResponse.json({ agent, remote, error: `Meta rejected the change: ${remote.error || `HTTP ${remote.status}`}` }, { status: 502 });
       await persist(agent, { status: 'paused', settings: { ...agent.settings, rollout: { enabled: false } } } as Partial<Agent>);
       recordAudit(agent.tenant_id, session.user.email, 'agent.pause', agent.name, 'warning');
@@ -173,16 +182,17 @@ export async function POST(req: Request, ctx: Ctx) {
         const batch = agent.faqs.slice(i, i + 4);
         const res = await Promise.all(batch.map((f) => meta.createFaq(entityId, { question: f.question, answer: f.answer }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
         res.forEach((r: any, j) => {
-          if (r?.ok) { faqOk++; batch[j].synced = true; }
+          if (r?.ok) { faqOk++; batch[j].synced = true; (batch[j] as any).meta_id = (r.data as any)?.id ?? null; }
           else if (dup(r)) { faqDup++; batch[j].synced = true; }
           else { faqFail++; batch[j].synced = false; if (errors.length < 5) errors.push(`${batch[j].question.slice(0, 40)}: ${r?.error || 'error'}`); }
         });
       }
 
-      if (agent.meta_agent_id) {
+      const syncAgentId = (await resolveAgentId(agent)).agentId;
+      if (syncAgentId) {
         for (let i = 0; i < agent.skills.length; i += 4) {
           const batch = agent.skills.slice(i, i + 4);
-          const res = await Promise.all(batch.map((sk) => meta.createSkill(entityId, agent.meta_agent_id as string, { title: sk.title, description: sk.description, skill: sk.skill }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
+          const res = await Promise.all(batch.map((sk) => meta.createSkill(entityId, syncAgentId as string, { title: sk.title, description: sk.description, skill: sk.skill }, token).catch((e) => ({ ok: false, status: 0, error: String(e) }))));
           res.forEach((r: any, j) => {
             if (r?.ok) { skillOk++; batch[j].synced = true; }
             else if (dup(r)) { skillDup++; batch[j].synced = true; }
@@ -202,8 +212,9 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     case 'rollout': {
       const enabled = body.enabled !== false;
-      const remote = token && agent.meta_agent_id
-        ? await meta.putRollout(entityId, agent.meta_agent_id, enabled, token)
+      const resolvedRoll = await resolveAgentId(agent);
+      const remote = token && resolvedRoll.agentId
+        ? await meta.putRollout(entityId, resolvedRoll.agentId, enabled, token)
         : null;
       if (remote && !remote.ok) {
         return NextResponse.json({ agent, remote, error: `Meta rejected the rollout change: ${remote.error || 'error'}` }, { status: 502 });
@@ -237,10 +248,10 @@ export async function POST(req: Request, ctx: Ctx) {
       const lower = text.toLowerCase();
       let reply = "I can help with that. Could you share a few more details?";
       let tool: string | undefined;
-      if (/pnr|booking|status/.test(lower)) { reply = 'Let me look that up. Share your 6-character PNR (for example AIXQ7T2M) and I will pull the booking status.'; tool = 'get_booking_by_pnr'; }
-      else if (/refund|cancel/.test(lower)) { reply = 'Cancellation depends on your fare rules. Share the PNR and I will check whether it is refundable before you confirm.'; tool = 'cancel_booking'; }
-      else if (/flight|del|bom|fare|cheap/.test(lower)) { reply = 'I can search live fares. What are your origin, destination and travel date?'; tool = 'search_flights'; }
-      else if (/check.?in|boarding/.test(lower)) { reply = 'Web check-in opens 14 days before departure. Send your PNR and last name and I will check you in.'; tool = 'web_checkin'; }
+      if (/orderid|booking|status/.test(lower)) { reply = 'Let me look that up. Share your 6-character orderId (for example AIXQ7T2M) and I will pull the booking status.'; tool = 'get_booking_by_pnr'; }
+      else if (/refund|cancel/.test(lower)) { reply = 'Cancellation depends on your fare rules. Share the orderId and I will check whether it is refundable before you confirm.'; tool = 'cancel_booking'; }
+      else if (/items|del|bom|fare|cheap/.test(lower)) { reply = 'I can search live fares. What are your origin, destination and travel date?'; tool = 'search_flights'; }
+      else if (/check.?in|boarding/.test(lower)) { reply = 'Web check-in opens 14 days before departure. Send your orderId and last name and I will check you in.'; tool = 'web_checkin'; }
       else if (/human|agent|support/.test(lower)) { reply = agent.settings.handoff.message; tool = 'thread_control'; }
       return NextResponse.json({
         reply, tool, mode: 'sandbox',
@@ -267,9 +278,19 @@ export async function PUT(req: Request, ctx: Ctx) {
   const body = await req.json();
 
   if (section === 'faqs') {
-    agent.faqs = agent.faqs.map((f) => (f.id === body.id ? { ...f, ...body, updated_at: nowIso() } : f));
+    const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
+    const before = agent.faqs.find((f) => f.id === body.id);
+    let remote: any = null;
+    if (token && before) {
+      const metaId = (before as any).meta_id;
+      remote = metaId
+        ? await meta.updateFaq(entityId, metaId, { question: body.question ?? before.question, answer: body.answer ?? before.answer }, token).catch(() => null)
+        : await meta.createFaq(entityId, { question: body.question ?? before.question, answer: body.answer ?? before.answer }, token).catch(() => null);
+    }
+    const newMetaId = remote?.ok ? ((remote.data as any)?.id ?? (before as any)?.meta_id ?? null) : (before as any)?.meta_id ?? null;
+    agent.faqs = agent.faqs.map((f) => (f.id === body.id ? { ...f, ...body, id: f.id, meta_id: newMetaId, synced: !!newMetaId, updated_at: nowIso() } : f));
     await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
-    return NextResponse.json({ ok: true, faqs: agent.faqs });
+    return NextResponse.json({ ok: true, faqs: agent.faqs, remote, meta_id: newMetaId });
   }
   if (section === 'skills') {
     agent.skills = agent.skills.map((s) => (s.id === body.id ? { ...s, ...body, updated_at: nowIso() } : s));
@@ -309,10 +330,26 @@ export async function DELETE(req: Request, ctx: Ctx) {
 
   let deleted = 0;
   if (section === 'faqs') {
+    const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
+    const going = agent.faqs.filter((f) => ids.includes(f.id));
     const before = agent.faqs.length;
     agent.faqs = agent.faqs.filter((f) => !ids.includes(f.id));
     deleted = before - agent.faqs.length;
     await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+    // Push the deletion to Meta - the API supports DELETE /agent_config/faq/{faq_id}
+    const removed: string[] = [];
+    if (token && /^\d{10,20}$/.test(entityId)) {
+      for (const f of going) {
+        const metaId = (f as any).meta_id;
+        if (!metaId) continue;
+        const r = await meta.deleteFaq(entityId, metaId, token).catch(() => null);
+        if (r && (r.ok || r.status === 404)) removed.push(metaId);
+      }
+    }
+    return NextResponse.json({
+      ok: true, deleted, requested: ids.length, removed_at_meta: removed.length,
+      note: removed.length ? `${removed.length} of ${going.filter((f) => (f as any).meta_id).length} entries were also deleted at Meta.` : 'Removed locally. Entries without a stored Meta id stay live at Meta.',
+    });
   } else if (section === 'skills') {
     const before = agent.skills.length;
     agent.skills = agent.skills.filter((s) => !ids.includes(s.id));
@@ -334,7 +371,43 @@ export async function DELETE(req: Request, ctx: Ctx) {
   } else return NextResponse.json({ error: 'Unsupported section' }, { status: 400 });
 
   recordAudit(agent.tenant_id, session.user.email, `${section}.delete`, `${deleted} item${deleted === 1 ? '' : 's'} (${ids.length} selected)`);
-  return NextResponse.json({ ok: true, deleted, requested: ids.length, note: section === 'faqs' || section === 'skills' ? 'Removed locally. Meta exposes no delete endpoint for FAQs or skills, so anything already pushed stays live there until you re-publish the agent.' : undefined });
+  return NextResponse.json({ ok: true, deleted, requested: ids.length, note: section === 'skills' ? 'Removed locally. Meta has no delete endpoint for skills, so a copy already pushed stays live until the agent config is replaced.' : undefined });
+}
+
+export async function GET(req: Request, ctx: Ctx) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const { id, section } = await ctx.params;
+  if (section !== 'faqs') return NextResponse.json({ error: 'Use POST/PUT/DELETE for this section.' }, { status: 405 });
+  const res = await load(session, id);
+  if ('error' in res) return res.error;
+  const agent = res.agent as Agent;
+  await syncEntityId(agent);
+
+  const token = metaTokenInfo().headerValue?.replace(/^Bearer\s+/i, '') || null;
+  if (!token) return NextResponse.json({ error: 'No Meta token on this deployment — cannot read FAQ state from Meta.' }, { status: 503 });
+  if (!/^\d{10,20}$/.test(agent.entity_id)) return NextResponse.json({ error: 'No Meta phone number ID bound to this agent.' }, { status: 400 });
+
+  const remote = await meta.listFaqs(agent.entity_id, token);
+  if (!remote.ok) return NextResponse.json({ error: remote.error || `Meta returned ${remote.status}`, status: remote.status }, { status: 502 });
+
+  const raw = remote.data as any;
+  const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
+  const byQuestion = new Map(list.map((f) => [String(f.question || '').trim().toLowerCase(), f]));
+
+  let matched = 0;
+  agent.faqs = agent.faqs.map((f) => {
+    const hit = byQuestion.get(f.question.trim().toLowerCase());
+    if (hit) { matched++; return { ...f, meta_id: hit.id, synced: true }; }
+    return { ...f, meta_id: null, synced: false };
+  });
+  await persist(agent, { faqs: agent.faqs } as Partial<Agent>);
+
+  return NextResponse.json({
+    agent, mode: 'graph', http: remote.status,
+    meta: { total: list.length, matched, local: agent.faqs.length },
+    faqs: list,
+  });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {

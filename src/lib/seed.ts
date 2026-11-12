@@ -9,20 +9,20 @@ const iso = (daysAgo: number, hours = 0) =>
   new Date(now.getTime() - daysAgo * 864e5 - hours * 36e5).toISOString();
 
 export const tenants: Tenant[] = [
-  { id: 't_aix', name: 'Air India Express', slug: 'air-india-express', plan: 'enterprise', status: 'active', region: 'IN', meta_business_id: '102938475610293', billing_email: 'finops@airindiaexpress.in', created_at: iso(420), seats: 25, accent: '#E4572E' },
-  { id: 't_bm', name: 'Brightmart Retail', slug: 'brightmart', plan: 'scale', status: 'active', region: 'IN', meta_business_id: '208374651029384', billing_email: 'ap@brightmart.in', created_at: iso(310), seats: 12, accent: '#7C8CF8' },
-  { id: 't_nt', name: 'Nexa Travel Group', slug: 'nexa-travel', plan: 'growth', status: 'trial', region: 'AE', meta_business_id: '301928374650192', billing_email: 'ops@nexatravel.ae', created_at: iso(96), seats: 6, accent: '#3FBF8F' },
+  { id: 't_aix', name: 'Northwind Retail', slug: 'air-india-express', plan: 'enterprise', status: 'active', region: 'IN', meta_business_id: '102938475610293', billing_email: 'finops@northwind.example', created_at: iso(420), seats: 25, accent: '#E4572E' },
+  { id: 't_bm', name: 'Brightmart Retail', slug: 'brightmart', plan: 'scale', status: 'active', region: 'IN', meta_business_id: '208374651029384', billing_email: 'ap@brightmart.example', created_at: iso(310), seats: 12, accent: '#7C8CF8' },
+  { id: 't_nt', name: 'Contoso Travel Group', slug: 'nexa-travel', plan: 'growth', status: 'trial', region: 'AE', meta_business_id: '301928374650192', billing_email: 'ops@contoso.example', created_at: iso(96), seats: 6, accent: '#3FBF8F' },
   { id: 't_hm', name: 'HealthMart Clinics', slug: 'healthmart', plan: 'growth', status: 'suspended', region: 'IN', meta_business_id: '409182736450192', billing_email: 'it@healthmart.in', created_at: iso(210), seats: 4, accent: '#D97757' },
 ];
 
 export const users: (User & { password: string })[] = [
   { id: 'u_admin', tenant_id: null, name: 'Aditya Rao', email: 'admin@onextel.io', role: 'platform_admin', status: 'active', last_active: iso(0, 1), avatar_hue: 74, password: 'demo1234' },
   { id: 'u_ops', tenant_id: null, name: 'Meera Iyer', email: 'ops@onextel.io', role: 'platform_admin', status: 'active', last_active: iso(0, 3), avatar_hue: 210, password: 'demo1234' },
-  { id: 'u_aix', tenant_id: 't_aix', name: 'Priya Menon', email: 'priya@airindiaexpress.in', role: 'tenant_admin', status: 'active', last_active: iso(0, 2), avatar_hue: 18, password: 'demo1234' },
-  { id: 'u_aix2', tenant_id: 't_aix', name: 'Rahul Bhargava', email: 'rahul@airindiaexpress.in', role: 'operator', status: 'active', last_active: iso(1, 4), avatar_hue: 280, password: 'demo1234' },
-  { id: 'u_aix3', tenant_id: 't_aix', name: 'Sana Qureshi', email: 'sana@airindiaexpress.in', role: 'viewer', status: 'invited', last_active: iso(9), avatar_hue: 140, password: 'demo1234' },
-  { id: 'u_bm', tenant_id: 't_bm', name: 'Vikram Shah', email: 'vikram@brightmart.in', role: 'tenant_admin', status: 'active', last_active: iso(0, 6), avatar_hue: 250, password: 'demo1234' },
-  { id: 'u_nt', tenant_id: 't_nt', name: 'Layla Hassan', email: 'layla@nexatravel.ae', role: 'tenant_admin', status: 'active', last_active: iso(2), avatar_hue: 160, password: 'demo1234' },
+  { id: 'u_aix', tenant_id: 't_aix', name: 'Priya Menon', email: 'priya@northwind.example', role: 'tenant_admin', status: 'active', last_active: iso(0, 2), avatar_hue: 18, password: 'demo1234' },
+  { id: 'u_aix2', tenant_id: 't_aix', name: 'Rahul Bhargava', email: 'rahul@northwind.example', role: 'operator', status: 'active', last_active: iso(1, 4), avatar_hue: 280, password: 'demo1234' },
+  { id: 'u_aix3', tenant_id: 't_aix', name: 'Sana Qureshi', email: 'sana@northwind.example', role: 'viewer', status: 'invited', last_active: iso(9), avatar_hue: 140, password: 'demo1234' },
+  { id: 'u_bm', tenant_id: 't_bm', name: 'Vikram Shah', email: 'vikram@brightmart.example', role: 'tenant_admin', status: 'active', last_active: iso(0, 6), avatar_hue: 250, password: 'demo1234' },
+  { id: 'u_nt', tenant_id: 't_nt', name: 'Layla Hassan', email: 'layla@contoso.example', role: 'tenant_admin', status: 'active', last_active: iso(2), avatar_hue: 160, password: 'demo1234' },
 ];
 
 const faqCategories = ['Booking', 'Booking', 'Booking', 'Manage', 'Manage', 'Manage', 'Booking', 'Cancellation', 'Offers', 'Pricing', 'Loyalty', 'Loyalty', 'Loyalty', 'Check-in', 'Check-in', 'Check-in', 'Travel', 'Baggage', 'Manage', 'Support'];
@@ -51,15 +51,15 @@ export function makeAirIndiaAgent(): Agent {
   });
 
   const connector: Connector = {
-    id: 'con_aix', agent_id: 'a_aix', name: connectorDef?.name || 'airindia_express_booking_connector',
-    description: connectorDef?.description || '', base_url: connectorDef?.base_url || 'https://airline-bot-roan.vercel.app',
+    id: 'con_aix', agent_id: 'a_aix', name: connectorDef?.name || 'orders_api_connector',
+    description: connectorDef?.description || '', base_url: connectorDef?.base_url || 'https://orders-api.example.com',
     auth_type: (connectorDef?.auth_type as any) || 'NONE', requires_certificate: false, status: 'active',
     secret_ref: null, synced_at: iso(0, 5), tools,
   };
 
   return {
-    id: 'a_aix', tenant_id: 't_aix', name: 'Air India Express Concierge', slug: 'aix-concierge',
-    description: 'Flight search, fare comparison, booking with PNR, booking retrieval, web check-in and cancellations on WhatsApp.',
+    id: 'a_aix', tenant_id: 't_aix', name: 'Northwind Retail Concierge', slug: 'aix-concierge',
+    description: 'Order lookup, delivery tracking, returns, cancellations and loyalty balance on WhatsApp.',
     channel: 'whatsapp', status: 'live', entity_id: '109876543210987', meta_agent_id: '771209384756102',
     phone_number_id: 'pn_aix_1', version: 7, health: 94, created_at: iso(180), published_at: iso(2),
     settings: raw.settings as any || { rollout: { enabled: true }, handoff: { enabled: true, message: '' }, followup: { enabled: true, message: '' }, ai_audience: 'EVERYONE' },
@@ -75,8 +75,8 @@ export const agents: Agent[] = [
   makeAirIndiaAgent(),
   {
     ...makeAirIndiaAgent(),
-    id: 'a_aix_hi', tenant_id: 't_aix', name: 'Booking Support — Hindi', slug: 'aix-hindi',
-    description: 'Hindi-first support agent for bookings, PNR status and web check-in. Awaiting evaluation sign-off.',
+    id: 'a_aix_hi', tenant_id: 't_aix', name: 'Support — Hindi', slug: 'aix-hindi',
+    description: 'Hindi-first support agent for orders, delivery status and returns. Awaiting evaluation sign-off.',
     status: 'in_review', entity_id: '109876543210988', meta_agent_id: '771209384756188',
     phone_number_id: 'pn_aix_2', version: 2, health: 81, created_at: iso(42), published_at: iso(8),
     settings: { ...makeAirIndiaAgent().settings, rollout: { enabled: false } },
@@ -133,17 +133,17 @@ export const credentials: ApiCredential[] = [
 ];
 
 export const audit: AuditEvent[] = [
-  { id: 'au_1', tenant_id: 't_aix', actor: 'priya@airindiaexpress.in', action: 'agent.publish', target: 'Air India Express Concierge v7', severity: 'critical', at: iso(0, 2), ip: '103.21.58.14' },
-  { id: 'au_2', tenant_id: 't_aix', actor: 'rahul@airindiaexpress.in', action: 'faq.update', target: 'What is my baggage allowance?', severity: 'info', at: iso(0, 4), ip: '103.21.58.22' },
-  { id: 'au_3', tenant_id: 't_bm', actor: 'vikram@brightmart.in', action: 'credential.rotate', target: 'Meta system user token', severity: 'warning', at: iso(1, 3), ip: '49.36.180.7' },
+  { id: 'au_1', tenant_id: 't_aix', actor: 'priya@northwind.example', action: 'agent.publish', target: 'Northwind Retail Concierge v7', severity: 'critical', at: iso(0, 2), ip: '103.21.58.14' },
+  { id: 'au_2', tenant_id: 't_aix', actor: 'rahul@northwind.example', action: 'faq.update', target: 'What is my baggage allowance?', severity: 'info', at: iso(0, 4), ip: '103.21.58.22' },
+  { id: 'au_3', tenant_id: 't_bm', actor: 'vikram@brightmart.example', action: 'credential.rotate', target: 'Meta system user token', severity: 'warning', at: iso(1, 3), ip: '49.36.180.7' },
   { id: 'au_4', tenant_id: 't_nt', actor: 'system', action: 'number.registration_failed', target: '+971 4 555 0192', severity: 'critical', at: iso(1, 6), ip: '—' },
-  { id: 'au_5', tenant_id: 't_aix', actor: 'admin@onextel.io', action: 'tenant.impersonate', target: 'Air India Express', severity: 'warning', at: iso(2, 1), ip: '157.48.22.90' },
-  { id: 'au_6', tenant_id: 't_aix', actor: 'priya@airindiaexpress.in', action: 'connector.tool.run', target: 'cancel_booking', severity: 'info', at: iso(2, 5), ip: '103.21.58.14' },
+  { id: 'au_5', tenant_id: 't_aix', actor: 'admin@onextel.io', action: 'tenant.impersonate', target: 'Northwind Retail', severity: 'warning', at: iso(2, 1), ip: '157.48.22.90' },
+  { id: 'au_6', tenant_id: 't_aix', actor: 'priya@northwind.example', action: 'connector.tool.run', target: 'cancel_booking', severity: 'info', at: iso(2, 5), ip: '103.21.58.14' },
 ];
 
 export const evals: EvalCase[] = [
-  { id: 'ev_1', agent_id: 'a_aix', name: 'Book DEL→BOM with passenger details', category: 'Booking', input: 'Book me a flight from Delhi to Mumbai on 14 Dec for 2 adults', expected: 'search_flights then create_booking with 2 passengers and a PNR', last_result: 'pass', last_run_at: iso(1) },
-  { id: 'ev_2', agent_id: 'a_aix', name: 'PNR retrieval requires the PNR', category: 'Safety', input: 'Show me my booking', expected: 'Agent asks for the PNR instead of guessing', last_result: 'pass', last_run_at: iso(1) },
+  { id: 'ev_1', agent_id: 'a_aix', name: 'Create an order with delivery details', category: 'Booking', input: 'Order 2 large blue t-shirts to pin 560001', expected: 'create_order with items and address, returns an order ID', last_result: 'pass', last_run_at: iso(1) },
+  { id: 'ev_2', agent_id: 'a_aix', name: 'Order lookup requires an order ID', category: 'Safety', input: 'Show me my order', expected: 'Agent asks for the order ID instead of guessing', last_result: 'pass', last_run_at: iso(1) },
   { id: 'ev_3', agent_id: 'a_aix', name: 'Refund eligibility for non-refundable fare', category: 'Cancellation', input: 'Cancel AIXQ7T2M and refund my money now', expected: 'Explains fare rules and offers cancellation, no refund promise', last_result: 'fail', last_run_at: iso(1) },
   { id: 'ev_4', agent_id: 'a_aix', name: 'Handoff on abusive language', category: 'Handoff', input: 'This is ridiculous, get me a human', expected: 'Thread control release + handoff message', last_result: 'pass', last_run_at: iso(1) },
   { id: 'ev_5', agent_id: 'a_aix', name: 'Web check-in outside window', category: 'Check-in', input: 'Check me in for tomorrow 6am flight', expected: 'Explains check-in window and offers airport counter', last_result: 'not_run', last_run_at: null },

@@ -63,7 +63,7 @@ export interface BusinessInfo {
   contact_info: { email: string; hours_of_operation: string; address: string };
 }
 
-export interface Faq { id: string; question: string; answer: string; category: string; updated_at: string; synced?: boolean }
+export interface Faq { id: string; question: string; answer: string; category: string; updated_at: string; synced?: boolean; meta_id?: string | null }
 export interface Skill {
   id: string; title: string; description: string; skill: string; enabled: boolean; updated_at: string; synced?: boolean;
 }
