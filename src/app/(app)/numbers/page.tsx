@@ -56,7 +56,7 @@ export default function NumbersPage() {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     try {
-      await api(`/api/numbers/${fd.get('id')}`, 'PATCH', { action: 'update', wa_phone_number_id: fd.get('pn'), waba_id: fd.get('waba') });
+      await api(`/api/numbers/${fd.get('id')}`, 'PATCH', { action: 'update', wa_phone_number_id: fd.get('pn'), waba_id: fd.get('waba'), agent_id: fd.get('agent') });
       push('Number IDs saved.');
       reload();
     } catch (err) {
@@ -202,12 +202,18 @@ export default function NumbersPage() {
               </div>
             )}
             {result.steps.some((s) => s.data) && (
-              <details>
+              <details open={!result.agentId}>
                 <summary className="small dim" style={{ cursor: 'pointer' }}>Raw Meta response</summary>
                 <pre className="code-block" style={{ marginTop: 8, maxHeight: 220 }}>
                   {JSON.stringify(result.steps.map((s) => ({ step: s.step, data: s.data })), null, 2)}
                 </pre>
               </details>
+            )}
+            {!result.agentId && result.steps.some((s) => s.data) && (
+              <div className="notice" style={{ margin: 0 }}>
+                No numeric agent ID came back. Copy the response above, or download it from Settings → Meta API request log,
+                then paste the real ID from Meta Business Suite under <b>Fix IDs → Agent ID</b>.
+              </div>
             )}
           </div>
         </Card>
@@ -282,7 +288,13 @@ export default function NumbersPage() {
                           <button className="btn btn-primary" disabled={pin.length !== 6 || regBusy === n.id} onClick={() => register(n, pin)}>
                             {regBusy === n.id ? 'Registering…' : n.status === 'active' ? 'Re-run registration' : 'Register number & onboard agent'}
                           </button>
-                          {n.meta_agent_id && <span className="mono tiny dim">agent {n.meta_agent_id}</span>}
+                          {n.meta_agent_id ? (
+                            <span className="mono tiny dim" title={n.meta_agent_id}>
+                              agent {n.meta_agent_id.length > 26 ? `${n.meta_agent_id.slice(0, 12)}…${n.meta_agent_id.slice(-6)}` : n.meta_agent_id}
+                              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 4, padding: '0 4px' }}
+                                onClick={() => { navigator.clipboard?.writeText(n.meta_agent_id!); push('Agent ID copied.'); }}>copy</button>
+                            </span>
+                          ) : null}
                         </div>
                         <div className="tiny dim">
                           The PIN is your business’s two-step verification code for this number in WhatsApp Manager — Meta requires it
@@ -290,7 +302,7 @@ export default function NumbersPage() {
                           “Already registered” is treated as success and onboarding continues.
                         </div>
                         <details>
-                          <summary className="tiny mono dim" style={{ cursor: 'pointer', padding: '2px 0' }}>Fix IDs (phone number ID / WABA ID)</summary>
+                          <summary className="tiny mono dim" style={{ cursor: 'pointer', padding: '2px 0' }}>Fix IDs (phone number ID / WABA ID / agent ID)</summary>
                           <form onSubmit={saveIds} className="stack" style={{ gap: 8, paddingTop: 8 }}>
                             <input type="hidden" name="id" value={n.id} />
                             <div className="row" style={{ gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -303,6 +315,12 @@ export default function NumbersPage() {
                               <div style={{ width: 230 }}>
                                 <Field label="WABA ID">
                                   <input name="waba" className="input mono" inputMode="numeric" placeholder="1790923784894660" defaultValue={n.waba_id} />
+                                </Field>
+                              </div>
+                              <div style={{ width: 230 }}>
+                                <Field label="Agent ID (from Meta)">
+                                  <input name="agent" className="input mono" inputMode="numeric" placeholder="771209384756102"
+                                    defaultValue={/^(\d{5,30}|pfbid[0-9A-Za-z]{30,})$/.test(n.meta_agent_id || '') ? n.meta_agent_id! : ''} />
                                 </Field>
                               </div>
                               <button className="btn btn-sm" type="submit">Save IDs</button>

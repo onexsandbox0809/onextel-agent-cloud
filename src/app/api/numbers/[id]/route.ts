@@ -11,6 +11,29 @@ const PN_RE = /^\d{10,20}$/;
 
 const digits = (v: unknown) => String(v ?? '').replace(/[^0-9]/g, '');
 
+/**
+ * Meta Business Agent IDs come in two shapes, both confirmed against live API:
+ *   numeric     771209384756102
+ *   pfbid…      pfbid0QupfkJygt8jk8jQcXt6HBHuF7Bn6QuepT8kmoh…
+ * Anything else (URLs, HTML, "undefined") is rejected.
+ */
+const AGENT_ID_RE = /^(\d{5,30}|pfbid[0-9A-Za-z]{30,})$/;
+
+function pickAgentId(body: any): { id: string | null; raw: string | null } {
+  if (!body || typeof body !== 'object') return { id: null, raw: null };
+  const candidates = [
+    body.agent_id, body.agentId,
+    body.data?.agent_id, body.data?.agentId,
+    body.agent?.agent_id, body.agent?.id,
+    body.result?.agent_id, body.result?.id,
+    body.agents?.[0]?.agent_id, body.agents?.[0]?.id,
+    body.id,
+  ];
+  const raw = candidates.find((c) => typeof c === 'string' && c.trim()) ?? null;
+  if (!raw) return { id: null, raw: null };
+  return { id: AGENT_ID_RE.test(raw.trim()) ? raw.trim() : null, raw: raw.trim() };
+}
+
 async function load(id: string): Promise<PhoneNumber | undefined> {
   if (isDemo()) return db().numbers.find((n) => n.id === id);
   return (await sbNumber(id)) || undefined;
@@ -41,6 +64,14 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
       return NextResponse.json({
         error: 'The Meta phone number ID must be 10-20 digits (e.g. 1312665798592137). That is the numeric ID from Meta, not the phone number itself.',
       }, { status: 400 });
+    }
+    if (body.agent_id !== undefined) {
+      const v = String(body.agent_id || '').trim();
+      if (v && !AGENT_ID_RE.test(v)) {
+        return NextResponse.json({ error: 'That does not look like a Meta agent ID — expected a number (771209384756102) or a pfbid… id.' }, { status: 400 });
+      }
+      number.meta_agent_id = v || null;
+      if (v) number.status = 'active';
     }
     if (body.display) number.display = String(body.display).trim();
     number.wa_phone_number_id = pn;
@@ -125,14 +156,23 @@ async function handle(req: Request, ctx: { params: Promise<{ id: string }> }) {
     }
 
     const d: any = onboard.data || {};
-    const agentId = d.agent_id || d.agent?.id || d.id || d.data?.agent_id || null;
+    const picked = pickAgentId(d);
+    const agentId = picked.id;
     number.status = 'active';
     number.registered_at = nowIso();
     number.two_step_pin_set = true;
     number.meta_agent_id = agentId || number.meta_agent_id || null;
     await persist(number);
-    recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${agentId || 'unknown'}`, 'critical');
-    return NextResponse.json({ number, agent_id: agentId, mode: 'graph', needs_pin: false, steps });
+    recordAudit(number.tenant_id, session.user.email, 'agent.onboard', `${number.display} → agent ${agentId || 'unconfirmed'}`, agentId ? 'critical' : 'warning');
+    return NextResponse.json({
+      number, agent_id: agentId, mode: 'graph', needs_pin: false, steps,
+      raw_agent_value: picked.raw,
+      warning: agentId
+        ? undefined
+        : picked.raw
+        ? `Number registered, but Meta's onboarding response did not contain a numeric agent ID (it returned "${picked.raw.slice(0, 60)}"). Nothing was saved as the agent ID — open Meta Business Suite, find the agent for this number and paste its ID under "Fix IDs".`
+        : 'Number registered, but the onboarding response had no agent ID field. Check the raw response below; if the agent exists in Meta Business Suite, paste its ID under "Fix IDs".',
+    });
   }
 
   if (body.action === 'assign') {

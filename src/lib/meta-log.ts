@@ -34,8 +34,8 @@ type Entry = {
 };
 
 const g = globalThis as any;
-if (!g.__mba_meta_log) g.__mba_meta_log = { lines: [] as string[], day: DAY(), syncing: false, lastError: '' as string };
-const store = g.__mba_meta_log as { lines: string[]; day: string; syncing: boolean; lastError: string };
+if (!g.__mba_meta_log) g.__mba_meta_log = { lines: [] as string[], day: DAY(), synced: 0, syncing: false, lastError: '' as string };
+const store = g.__mba_meta_log as { lines: string[]; day: string; synced: number; syncing: boolean; lastError: string };
 
 const redactValue = (k: string, v: unknown) => {
   const key = k.toLowerCase();
@@ -82,7 +82,7 @@ export function formatEntry(e: Entry): string {
 }
 
 function push(text: string) {
-  if (store.day !== DAY()) { store.day = DAY(); store.lines = []; }
+  if (store.day !== DAY()) { store.day = DAY(); store.lines = []; store.synced = 0; }
   store.lines.push(text);
   if (store.lines.length > MAX_MEMORY_LINES) store.lines.splice(0, store.lines.length - MAX_MEMORY_LINES);
   void syncToStorage();
@@ -106,16 +106,19 @@ async function syncToStorage() {
     let existing = '';
     const dl = await sb.storage.from(LOG_BUCKET).download(path);
     if (dl.data) existing = await dl.data.text();
-    const body = `${existing}${store.lines.slice(-40).join('\n')}`.slice(-2_000_000);
+    // Append only entries this instance has not written yet — never re-send the buffer.
+    const pending = store.lines.slice(store.synced);
+    if (!pending.length && existing) { store.syncing = false; return; }
+    const body = `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}${pending.join('\n')}`.slice(-2_000_000);
     const up = await sb.storage.from(LOG_BUCKET).upload(path, new Blob([body], { type: 'text/plain' }), { upsert: true, contentType: 'text/plain' });
     if (up.error) {
-      // bucket missing → create once, then retry
       if (/not found|Bucket/i.test(up.error.message)) {
         await sb.storage.createBucket(LOG_BUCKET, { public: false }).catch(() => {});
         const retry = await sb.storage.from(LOG_BUCKET).upload(path, new Blob([body], { type: 'text/plain' }), { upsert: true, contentType: 'text/plain' });
         store.lastError = retry.error?.message || '';
+        if (!retry.error) store.synced = store.lines.length;
       } else store.lastError = up.error.message;
-    } else store.lastError = '';
+    } else { store.lastError = ''; store.synced = store.lines.length; }
   } catch (e) {
     store.lastError = e instanceof Error ? e.message : String(e);
   } finally {
